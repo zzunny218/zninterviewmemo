@@ -1079,8 +1079,6 @@ function bindEvents() {
   $("#upload-card").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-upload").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-new-note").addEventListener("click", createInlineCanvasNote);
-  $("#ai-link-notes").addEventListener("click", (event) => runAi("links", event.currentTarget));
-  $("#ai-analyze-record").addEventListener("click", (event) => runAi("analysis", event.currentTarget));
   $("#upload-open-button").addEventListener("click", () => $("#pdf-input").click());
   $("#pdf-input").addEventListener("change", (event) => processPdf(event.target.files[0]));
   $("#source-document").addEventListener("contextmenu", showSelectionMenu);
@@ -1145,7 +1143,7 @@ function bindEvents() {
     toast("샘플 상태로 되돌렸어요.");
   });
   $("#refresh-persona").addEventListener("click", () => { renderPersonas(); toast("현재 근거로 캐릭터를 다시 정리했어요."); });
-  $("#generate-questions").addEventListener("click", (event) => runAi("questions", event.currentTarget));
+  
   $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(1.5, canvasZoom + .1); renderCanvas(); });
   $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(.6, canvasZoom - .1); renderCanvas(); });
   $("#canvas-reset").addEventListener("click", () => { fitCanvas(); });
@@ -1245,33 +1243,40 @@ function installCanvasPan(){
 }
 
 let recordTab = '원문';
+function normalizeSemester(value = '') { const match = String(value).match(/[12]학기|[12]·[12]학기/); return match ? match[0] : '학기 미정'; }
+function semesterTabs(){
+  // 세특은 학년·학기 단위로 먼저 찾고, 해당 화면 안에서는 과목 카드로 나눈다.
+  return [...new Set(state.blocks.filter((b) => /세부능력|교과학습/.test(b.section)).map((b) => b.grade + ' ' + normalizeSemester(b.semester)))];
+}
 function installRecordTabs(){
- const toolbar=$('.canvas-source-toolbar');const tabs=document.createElement('div');tabs.className='record-tabs';
- ['요약','창체','세특','기타','원문'].forEach(label=>{const button=document.createElement('button');button.textContent=label;button.type='button';button.onclick=()=>{recordTab=label;renderRecordTable();};tabs.append(button);});
- toolbar.before(tabs);
- const review=document.createElement('button');review.className='secondary-button';review.type='button';review.textContent='원본 대조·수정';review.onclick=openReview;toolbar.append(review);
- const table=document.createElement('div');table.id='record-table';table.hidden=true;$('.canvas-source-scroll').prepend(table);
+ const toolbar=$('.canvas-source-toolbar'), tabs=document.createElement('div');tabs.className='record-tabs';
+ const draw=()=>{tabs.innerHTML='';[...semesterTabs(),'창체','기록 묶음','원문'].forEach(label=>{const button=document.createElement('button');button.textContent=label;button.type='button';button.onclick=()=>{recordTab=label;renderCanvas();};tabs.append(button);});};
+ draw(); toolbar.before(tabs); const review=document.createElement('button');review.className='secondary-button';review.type='button';review.textContent='원본 대조·수정';review.onclick=openReview;toolbar.append(review);
+ const table=document.createElement('div');table.id='record-table';table.hidden=true;$('.canvas-source-scroll').prepend(table); window.refreshRecordTabs=draw;
 }
 function renderRecordTable(){
  const target=$('#record-table');if(!target)return;
- $$('.record-tabs button').forEach(b=>b.setAttribute('aria-pressed',String(b.textContent===recordTab)));
+ $$('.record-tabs button').forEach((b)=>b.setAttribute('aria-pressed',String(b.textContent===recordTab)));
  const raw=recordTab==='원문';target.hidden=raw;
- ['#canvas-source-document','#canvas-source-title','.canvas-source-meta','.canvas-source-toolbar'].forEach(selector=>$(selector).hidden=!raw);
+ ['#canvas-source-document','#canvas-source-title','.canvas-source-meta','.canvas-source-toolbar'].forEach((selector)=>$(selector).hidden=!raw);
  $('#cross-link-layer').style.display=raw?'':'none';if(raw)return;
- const group=b=>/출결|수상|자격|학폭|학교폭력|봉사/.test(b.section)?'요약':/창의|창체/.test(b.section)?'창체':/세부능력|교과학습/.test(b.section)?'세특':'기타';
- const blocks=state.blocks.filter(b=>group(b)===recordTab && (!state.preparedRecordVersion || b.id.startsWith('prepared-')));
- if(!blocks.length){target.innerHTML='<p>기록 없음</p>';return;}
- const groups=recordTab==='요약'?['요약']:[...new Set(blocks.map(b=>b.grade))];
- target.innerHTML=groups.map(grade=>{
-  const rows=recordTab==='요약'?blocks:blocks.filter(b=>b.grade===grade);
-  return '<section class="record-table-section"><h3>'+escapeHtml(grade)+'</h3><table><thead><tr><th>'+(recordTab==='요약'?'영역 · 학년':'과목 / 영역 · 학기')+'</th><th>내용</th></tr></thead><tbody>'+rows.map(b=>'<tr><th>'+escapeHtml(recordTab==='요약'?b.section+' · '+b.grade+' · '+(b.semester||''):b.subject+' · '+(b.semester||'학기 미기재'))+'<button class="table-source" data-source="'+escapeHtml(b.id)+'">원문 '+b.page+'쪽</button></th><td>'+escapeHtml(b.summary || b.text).replace(/\n/g,'<br>')+'</td></tr>').join('')+'</tbody></table></section>';
- }).join('');
- target.querySelectorAll('[data-source]').forEach(button=>button.onclick=()=>{state.activeBlockId=button.dataset.source;recordTab='원문';saveState();renderCanvas();});
+ const prepared=(b)=>!state.preparedRecordVersion||b.id.startsWith('prepared-');
+ const bundle=(b)=>/출결|수상|자격|학폭|학교폭력|봉사/.test(b.section);
+ let blocks=[], heading=recordTab;
+ if(recordTab==='기록 묶음'){blocks=state.blocks.filter((b)=>prepared(b)&&bundle(b));}
+ else if(recordTab==='창체'){blocks=state.blocks.filter((b)=>prepared(b)&&/창의|창체/.test(b.section));}
+ else { const [grade, semester]=recordTab.split(' ');blocks=state.blocks.filter((b)=>prepared(b)&&/세부능력|교과학습/.test(b.section)&&b.grade===grade&&normalizeSemester(b.semester)===semester); }
+ if(!blocks.length){target.innerHTML='<p class="record-empty">기록 없음</p>';return;}
+ // 같은 과목의 여러 원문 블록은 하나의 카드 안에 이어서 보여 준다.
+ const key=(b)=>recordTab==='기록 묶음'?b.section:(recordTab==='창체'?b.grade+' · '+b.subject:b.subject);
+ const groups=[...new Map(blocks.map((b)=>[key(b),[]])).entries()]; blocks.forEach((b)=>{const list=groups.find(([name])=>name===key(b))[1];if(!list.includes(b))list.push(b);});
+ target.innerHTML='<section class="record-card-section"><h3>'+escapeHtml(heading)+'</h3><div class="record-subject-grid">'+groups.map(([name,items])=>'<article class="record-subject-card"><h4>'+escapeHtml(name)+'</h4>'+items.map((b)=>'<div class="record-card-entry"><button class="table-source" data-source="'+escapeHtml(b.id)+'">PDF '+b.page+'쪽</button><p>'+escapeHtml(b.summary||b.text).replace(/\n/g,'<br>')+'</p></div>').join('')+'</article>').join('')+'</div></section>';
+ target.querySelectorAll('[data-source]').forEach((button)=>button.onclick=()=>{state.activeBlockId=button.dataset.source;recordTab='원문';saveState();renderCanvas();});
 }
 async function loadPreparedRecord(){
  try{
   const response=await fetch('./record-data.json');if(!response.ok)return;const data=await response.json();
-  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab='요약';renderAll();renderCanvas();};
+  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab=semesterTabs()[0] || '기록 묶음';window.refreshRecordTabs?.();renderAll();renderCanvas();};
   if(!hadSavedData){state.blocks=[];state.notes=[];state.questions=[];state.highlights=[];load();}
   else if(state.preparedRecordVersion!==data.version){const button=document.createElement('button');button.className='secondary-button';button.textContent='정리된 생기부 불러오기';button.onclick=()=>{load();button.remove();};$('.canvas-primary-actions').append(button);}
  }catch(error){console.error('정리된 생기부 읽기 실패',error);}
