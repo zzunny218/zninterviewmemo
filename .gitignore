@@ -2,3 +2,7 @@
 qa-*.png
 *.tar.gz
 *.tgz
+
+tmp/
+package-stage-record-weave/
+qa-final.png
