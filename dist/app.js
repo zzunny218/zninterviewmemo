@@ -574,18 +574,14 @@ function renderCrossLinks() {
     const points = closestPoints(a,b).map(p=>({x:p.x-splitRect.left,y:p.y-splitRect.top}));
     Object.assign(start,points[0]); Object.assign(end,points[1]);
     path.setAttribute("d",curvedPath(start,end));
-    const dotA = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    const dotB = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    dotA.setAttribute("cx", start.x); dotA.setAttribute("cy", start.y); dotA.setAttribute("r", 5);
-    dotB.setAttribute("cx", end.x); dotB.setAttribute("cy", end.y); dotB.setAttribute("r", 5);
-    dotA.style.fill = linkColor; dotB.style.fill = linkColor;
-    svg.append(path, dotA, dotB);
+    svg.append(path);
   });
 }
 
 function categoryIcon(category) {
   return ({ "탐구": "⌕", "성장": "↗", "협업": "◫", "진로": "◆", "자유 메모": "✦", "활동": "⚡", "캐릭터": "◎", "면접 질문": "?" })[category] || "•";
 }
+function installStyleMenu(node,note){const trigger=$(".node-style-trigger",node),popover=$(".node-style-popover",node);trigger.onclick=(event)=>{event.stopPropagation();popover.hidden=!popover.hidden;};popover.onclick=(event)=>{const icon=event.target.closest("[data-category]"),color=event.target.closest("[data-color]");if(icon)note.category=icon.dataset.category;if(color)note.color=color.dataset.color;if(!icon&&!color)return;saveState();renderCanvas();};}
 
 function noteContext(note) {
   const blocks = note.anchors.map((anchor) => state.blocks.find((block) => block.id === anchor.blockId)).filter(Boolean);
@@ -651,25 +647,21 @@ function renderCanvas() {
     node.style.left = `${item.x ?? 120}px`;
     node.style.top = `${item.y ?? 120}px`;
     const categoryControl = item.kind === "note"
-      ? `<button class="node-category-icon category-change" type="button" title="클릭해서 카테고리 변경" aria-label="현재 ${escapeHtml(item.category)} 카테고리. 클릭해서 변경">${categoryIcon(item.category)}</button>`
+      ? `<button class="node-category-icon node-style-trigger" type="button" title="아이콘·색 변경" aria-label="아이콘과 색 변경">${categoryIcon(item.category)}</button>`
       : `<span class="node-category-icon" aria-label="${escapeHtml(item.category)} 카테고리">${categoryIcon(item.category)}</span>`;
     const actions = item.kind === "note"
-      ? `<input class="node-border-color" type="color" value="${escapeHtml(item.color || "#5865f2")}" aria-label="메모 테두리 색상"><button class="node-mini collapse-node" type="button" aria-label="${item.collapsed ? "펼치기" : "접기"}">${item.collapsed ? "+" : "−"}</button>`
+      ? `<button class="node-mini collapse-node" type="button" aria-label="${item.collapsed ? "펼치기" : "접기"}">${item.collapsed ? "+" : "−"}</button>`
       : "";
-    const connector = item.kind === "note" ? `<button class="node-connector" type="button" aria-label="다른 메모로 연결선 드래그"></button>` : "";
+    const connector = "";
     const editTitle = item.kind === "note" ? 'class="node-title-edit" contenteditable="plaintext-only" spellcheck="true"' : "";
     const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="true" spellcheck="true"' : "";
-    node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}<span class="category-pill">${escapeHtml(item.category)}</span></div><div class="node-actions">${actions}</div></div><h3 ${editTitle}>${escapeHtml(item.title)}</h3><div ${editBody}>${safeNoteHtml(item.bodyHtml || escapeHtml(item.body || ""))}</div>${connector}`;
+    node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}</div><div class="node-actions">${actions}</div></div><h3 ${editTitle}>${escapeHtml(item.title)}</h3><div ${editBody}>${safeNoteHtml(item.bodyHtml || escapeHtml(item.body || ""))}</div>${connector}`;
     enableNodeDrag(node, item);
     if (item.kind === "note") {
-      $(".category-change", node).addEventListener("click", (event) => {
-        event.stopPropagation();
-        const categories = ["탐구", "성장", "협업", "진로", "자유 메모", "활동", "캐릭터", "면접 질문"];
-        item.sourceNote.category = categories[(categories.indexOf(item.sourceNote.category) + 1) % categories.length];
-        saveState();
-        renderCanvas();
-        toast(`${item.sourceNote.category} 카테고리로 바꿨어요.`);
-      });
+      const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
+      const categories=["탐구","성장","협업","진로","자유 메모","활동","캐릭터","면접 질문"]; const colors=["#5865f2","#57a5e5","#48a986","#e5a94e","#db6b83","#b18ae8"];
+      popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\">"+categoryIcon(category)+"</button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div>"; node.append(popover);
+      installStyleMenu(node, item.sourceNote);
       $(".collapse-node", node).addEventListener("click", (event) => {
         event.stopPropagation();
         item.sourceNote.collapsed = !item.sourceNote.collapsed;
@@ -695,16 +687,6 @@ function renderCanvas() {
         saveState();
         renderCanvasFilters();
       });
-      $(".node-border-color", node).addEventListener("input", (event) => {
-        event.stopPropagation();
-        item.sourceNote.color = event.target.value;
-        node.style.setProperty("--note-color", event.target.value);
-        node.style.borderColor = event.target.value;
-        renderCanvasSource(); renderCrossLinks();
-        saveState();
-      });
-      $(".node-border-color", node).addEventListener("pointerdown", (event) => event.stopPropagation());
-      enableConnectorDrag($(".node-connector", node), item.id);
     }
     layer.appendChild(node);
   });
@@ -1182,26 +1164,11 @@ function safeNoteHtml(value){
  });walk(tpl.content);return tpl.innerHTML;
 }
 function installFormatting(node,editor,note){
- const toolbar=document.createElement('div');toolbar.className='note-formatting';toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','메모 강조');
- let savedRange=null;
+ const toolbar=document.createElement('div');toolbar.className='note-formatting';toolbar.setAttribute('role','toolbar');let savedRange=null;
  const remember=()=>{const sel=window.getSelection();if(sel.rangeCount&&editor.contains(sel.getRangeAt(0).commonAncestorContainer))savedRange=sel.getRangeAt(0).cloneRange();};
- editor.addEventListener('keyup',remember);editor.addEventListener('mouseup',remember);
- const persist=()=>{note.body=editor.textContent.trim();note.bodyHtml=safeNoteHtml(editor.innerHTML);saveState();settleNodes();};
- editor.addEventListener('input',persist);
- [['굵게','bold'],['밑줄','underline'],['형광펜','highlight'],['강조 해제','clear']].forEach(([label,command])=>{
-  const button=document.createElement('button');button.type='button';button.textContent=label;
-  button.onpointerdown=e=>{e.preventDefault();e.stopPropagation();remember();};
-  button.onclick=()=>{editor.focus();if(savedRange){const sel=window.getSelection();sel.removeAllRanges();sel.addRange(savedRange);}
-   const sel=window.getSelection();if(!sel.rangeCount||!editor.contains(sel.getRangeAt(0).commonAncestorContainer))return;
-   if(command==='highlight'){
-    const range=sel.getRangeAt(0);if(range.collapsed)return;const mark=document.createElement('mark');mark.append(range.extractContents());range.insertNode(mark);sel.removeAllRanges();
-   }else if(command==='clear'){
-    const range=sel.getRangeAt(0);if(range.collapsed){const parent=sel.anchorNode.parentElement.closest('mark,u,b,strong');if(parent&&editor.contains(parent))parent.replaceWith(...parent.childNodes);}else{const plain=document.createTextNode(range.toString());range.deleteContents();range.insertNode(plain);}
-   }else document.execCommand(command,false,null);
-   savedRange=null;persist();
-  };toolbar.append(button);
- });editor.before(toolbar);
- editor.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,e.clipboardData.getData('text/plain'));persist();});
+ const persist=()=>{note.body=editor.textContent.trim();note.bodyHtml=safeNoteHtml(editor.innerHTML);saveState();settleNodes();};editor.addEventListener('keyup',remember);editor.addEventListener('mouseup',remember);editor.addEventListener('input',persist);
+ [['B','굵게','bold'],['U','밑줄','underline'],['▰','형광펜','highlight']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.setAttribute('aria-label',label);button.onpointerdown=e=>{e.preventDefault();e.stopPropagation();remember();};button.onclick=()=>{editor.focus();const sel=window.getSelection();if(savedRange){sel.removeAllRanges();sel.addRange(savedRange);}if(!sel.rangeCount)return;const range=sel.getRangeAt(0);if(command==='highlight'){const parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement;const mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.append(range.extractContents());range.insertNode(wrapper);}}else document.execCommand(command,false,null);savedRange=null;persist();};toolbar.append(button);});
+ editor.before(toolbar);editor.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,e.clipboardData.getData('text/plain'));persist();});
 }
 function storeNodePosition(node){
  const position={x:parseFloat(node.style.left)||0,y:parseFloat(node.style.top)||0};
