@@ -657,6 +657,7 @@ function renderCanvas() {
     const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="true" spellcheck="true"' : "";
     node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}</div><div class="node-actions">${actions}</div></div><h3 ${editTitle}>${escapeHtml(item.title)}</h3><div ${editBody}>${safeNoteHtml(item.bodyHtml || escapeHtml(item.body || ""))}</div>${connector}`;
     enableNodeDrag(node, item);
+    node.addEventListener("dblclick",(event)=>{if(event.target.closest("button,[contenteditable]"))return;focusCanvasNote(node);});
     if (item.kind === "note") {
       const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
       const categories=["탐구","성장","협업","진로","자유 메모","활동","캐릭터","면접 질문"]; const colors=["#5865f2","#57a5e5","#48a986","#e5a94e","#db6b83","#b18ae8"];
@@ -671,7 +672,7 @@ function renderCanvas() {
       const titleEdit = $(".node-title-edit", node);
       const bodyEdit = $(".node-body-edit", node);
       installFormatting(node, bodyEdit, item.sourceNote);
-      if(item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=(block?.subject || '원문')+' '+anchor.page+'쪽';button.onclick=()=>{state.activeBlockId=anchor.blockId;recordTab='원문';saveState();renderCanvas();};evidence.append(button);});node.append(evidence);}
+      if(item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=(block?.subject || '원문')+' '+anchor.page+'쪽';button.onclick=()=>{state.activeBlockId=anchor.blockId;recordTab=/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester);saveState();renderCanvas();};evidence.append(button);});node.append(evidence);}
       titleEdit.addEventListener("pointerdown", (event) => event.stopPropagation());
       bodyEdit.addEventListener("pointerdown", (event) => event.stopPropagation());
       titleEdit.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); titleEdit.blur(); } });
@@ -773,11 +774,17 @@ function enableNodeDrag(node, note) {
     if(event.button!==0 || event.target.closest("button,input,[contenteditable]"))return;
     event.preventDefault(); event.stopPropagation();
     node.setPointerCapture(event.pointerId); node.classList.add("dragging"); movingNodeId=note.id;
-    const start={x:event.clientX,y:event.clientY,left:parseFloat(node.style.left),top:parseFloat(node.style.top)};
-    const move=e=>{node.style.left=(start.left+(e.clientX-start.x)/canvasZoom)+"px";node.style.top=(start.top+(e.clientY-start.y)/canvasZoom)+"px";storeNodePosition(node);settleNodes();};
-    const up=()=>{node.classList.remove("dragging");movingNodeId=null;node.removeEventListener("pointermove",move);node.removeEventListener("pointerup",up);node.removeEventListener("pointercancel",up);storeNodePosition(node);settleNodes();saveState();};
+    const start={x:event.clientX,y:event.clientY,left:parseFloat(node.style.left),top:parseFloat(node.style.top)};let target={x:start.left,y:start.top},frame=0;
+    const paint=()=>{const currentX=parseFloat(node.style.left),currentY=parseFloat(node.style.top);const speed=matchMedia('(prefers-reduced-motion:reduce)').matches?1:.42;node.style.left=(currentX+(target.x-currentX)*speed)+"px";node.style.top=(currentY+(target.y-currentY)*speed)+"px";storeNodePosition(node);renderEdges();if(Math.abs(target.x-parseFloat(node.style.left))+Math.abs(target.y-parseFloat(node.style.top))>.2)frame=requestAnimationFrame(paint);else frame=0;};
+    const move=e=>{target={x:start.left+(e.clientX-start.x)/canvasZoom,y:start.top+(e.clientY-start.y)/canvasZoom};if(!frame)frame=requestAnimationFrame(paint);};
+    const up=()=>{node.classList.remove("dragging");movingNodeId=null;node.removeEventListener("pointermove",move);node.removeEventListener("pointerup",up);node.removeEventListener("pointercancel",up);if(frame)cancelAnimationFrame(frame);node.style.left=target.x+"px";node.style.top=target.y+"px";storeNodePosition(node);settleNodes();saveState();};
     node.addEventListener("pointermove",move);node.addEventListener("pointerup",up);node.addEventListener("pointercancel",up);
   });
+}
+
+function focusCanvasNote(node){
+ const stage=$('#canvas-stage');const zoom=Math.min(1.5,Math.max(canvasZoom,1.15));const target={x:stage.clientWidth/2-(parseFloat(node.style.left)+node.offsetWidth/2)*zoom,y:stage.clientHeight/2-(parseFloat(node.style.top)+node.offsetHeight/2)*zoom};const from={...canvasPan,zoom:canvasZoom};const began=performance.now();
+ const step=(now)=>{const t=Math.min(1,(now-began)/260),ease=1-Math.pow(1-t,3);canvasZoom=from.zoom+(zoom-from.zoom)*ease;canvasPan.x=from.x+(target.x-from.x)*ease;canvasPan.y=from.y+(target.y-from.y)*ease;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';$('#zoom-label').textContent=Math.round(canvasZoom*100)+'%';renderEdges();if(t<1)requestAnimationFrame(step);};requestAnimationFrame(step);
 }
 
 function enableConnectorDrag(handle, sourceId) {
@@ -1160,14 +1167,14 @@ function safeNoteHtml(value){
   if(['SCRIPT','STYLE','IFRAME','OBJECT','SVG'].includes(el.tagName)){el.remove();return;}
   walk(el);
   if(!['B','STRONG','U','MARK','BR','DIV','P','I','EM'].includes(el.tagName)){el.replaceWith(...el.childNodes);return;}
-  [...el.attributes].forEach(a=>el.removeAttribute(a.name));
+  [...el.attributes].forEach(a=>{if(!(el.tagName==='MARK'&&a.name==='data-hl'))el.removeAttribute(a.name);});
  });walk(tpl.content);return tpl.innerHTML;
 }
 function installFormatting(node,editor,note){
  const toolbar=document.createElement('div');toolbar.className='note-formatting';toolbar.setAttribute('role','toolbar');let savedRange=null;
  const remember=()=>{const sel=window.getSelection();if(sel.rangeCount&&editor.contains(sel.getRangeAt(0).commonAncestorContainer))savedRange=sel.getRangeAt(0).cloneRange();};
  const persist=()=>{note.body=editor.textContent.trim();note.bodyHtml=safeNoteHtml(editor.innerHTML);saveState();settleNodes();};editor.addEventListener('keyup',remember);editor.addEventListener('mouseup',remember);editor.addEventListener('input',persist);
- [['B','굵게','bold'],['U','밑줄','underline'],['▰','형광펜','highlight']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.setAttribute('aria-label',label);button.onpointerdown=e=>{e.preventDefault();e.stopPropagation();remember();};button.onclick=()=>{editor.focus();const sel=window.getSelection();if(savedRange){sel.removeAllRanges();sel.addRange(savedRange);}if(!sel.rangeCount)return;const range=sel.getRangeAt(0);if(command==='highlight'){const parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement;const mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.append(range.extractContents());range.insertNode(wrapper);}}else document.execCommand(command,false,null);savedRange=null;persist();};toolbar.append(button);});
+ [['B','굵게','bold'],['U','밑줄','underline'],['🖍','형광펜','highlight']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.setAttribute('aria-label',label);button.onpointerdown=e=>{e.preventDefault();e.stopPropagation();remember();};button.onclick=()=>{editor.focus();const sel=window.getSelection();if(savedRange){sel.removeAllRanges();sel.addRange(savedRange);}if(!sel.rangeCount)return;const range=sel.getRangeAt(0);if(command==='highlight'){const parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement;const mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.dataset.hl=note.highlightColor||'yellow';wrapper.append(range.extractContents());range.insertNode(wrapper);}}else document.execCommand(command,false,null);savedRange=null;persist();};if(command==='highlight'){const picker=document.createElement('div');picker.className='highlight-color-menu';picker.hidden=true;['yellow','blue','green','pink'].forEach((color)=>{const choice=document.createElement('button');choice.type='button';choice.className='hl-color '+color;choice.onclick=()=>{note.highlightColor=color;picker.hidden=true;saveState();};picker.append(choice);});button.oncontextmenu=(event)=>{event.preventDefault();picker.hidden=!picker.hidden;};button.ondblclick=(event)=>{event.preventDefault();picker.hidden=!picker.hidden;};toolbar.append(picker);}toolbar.append(button);});
  editor.before(toolbar);editor.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,e.clipboardData.getData('text/plain'));persist();});
 }
 function storeNodePosition(node){
@@ -1209,41 +1216,38 @@ function installCanvasPan(){
  });
 }
 
-let recordTab = '원문';
-function normalizeSemester(value = '') { const match = String(value).match(/[12]학기|[12]·[12]학기/); return match ? match[0] : '학기 미정'; }
-function semesterTabs(){
-  // 세특은 학년·학기 단위로 먼저 찾고, 해당 화면 안에서는 과목 카드로 나눈다.
-  return [...new Set(state.blocks.filter((b) => /세부능력|교과학습/.test(b.section)).map((b) => b.grade + ' ' + normalizeSemester(b.semester)))];
-}
+let recordTab = '1학년 1학기';
+const RECORD_TABS=['1학년 1학기','1학년 2학기','2학년 1학기','2학년 2학기','3학년 1학기','창체','기록 묶음'];
+function normalizeSemester(value=''){const match=String(value).match(/[12]학기|[12]·[12]학기/);return match?match[0]:'학기 미정';}
 function installRecordTabs(){
- const toolbar=$('.canvas-source-toolbar'), tabs=document.createElement('div');tabs.className='record-tabs';
- const draw=()=>{tabs.innerHTML='';[...semesterTabs(),'창체','기록 묶음','원문'].forEach(label=>{const button=document.createElement('button');button.textContent=label;button.type='button';button.onclick=()=>{recordTab=label;renderCanvas();};tabs.append(button);});};
- draw(); toolbar.before(tabs); const review=document.createElement('button');review.className='secondary-button';review.type='button';review.textContent='원본 대조·수정';review.onclick=openReview;toolbar.append(review);
- const table=document.createElement('div');table.id='record-table';table.hidden=true;$('.canvas-source-scroll').prepend(table); window.refreshRecordTabs=draw;
+ const toolbar=$('.canvas-source-toolbar'),tabs=document.createElement('div');tabs.className='record-tabs';
+ RECORD_TABS.forEach((label)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=()=>{recordTab=label;renderCanvas();};tabs.append(button);});
+ toolbar.before(tabs);toolbar.hidden=true;
+ const table=document.createElement('div');table.id='record-table';$('.canvas-source-scroll').prepend(table);
 }
 function renderRecordTable(){
  const target=$('#record-table');if(!target)return;
- $$('.record-tabs button').forEach((b)=>b.setAttribute('aria-pressed',String(b.textContent===recordTab)));
- const raw=recordTab==='원문';target.hidden=raw;
- ['#canvas-source-document','#canvas-source-title','.canvas-source-meta','.canvas-source-toolbar'].forEach((selector)=>$(selector).hidden=!raw);
- $('#cross-link-layer').style.display=raw?'':'none';if(raw)return;
- const prepared=(b)=>!state.preparedRecordVersion||b.id.startsWith('prepared-');
- const bundle=(b)=>/출결|수상|자격|학폭|학교폭력|봉사/.test(b.section);
- let blocks=[], heading=recordTab;
- if(recordTab==='기록 묶음'){blocks=state.blocks.filter((b)=>prepared(b)&&bundle(b));}
- else if(recordTab==='창체'){blocks=state.blocks.filter((b)=>prepared(b)&&/창의|창체/.test(b.section));}
- else { const [grade, semester]=recordTab.split(' ');blocks=state.blocks.filter((b)=>prepared(b)&&/세부능력|교과학습/.test(b.section)&&b.grade===grade&&normalizeSemester(b.semester)===semester); }
- if(!blocks.length){target.innerHTML='<p class="record-empty">기록 없음</p>';return;}
- // 같은 과목의 여러 원문 블록은 하나의 카드 안에 이어서 보여 준다.
- const key=(b)=>recordTab==='기록 묶음'?b.section:(recordTab==='창체'?b.grade+' · '+b.subject:b.subject);
- const groups=[...new Map(blocks.map((b)=>[key(b),[]])).entries()]; blocks.forEach((b)=>{const list=groups.find(([name])=>name===key(b))[1];if(!list.includes(b))list.push(b);});
- target.innerHTML='<section class="record-card-section"><h3>'+escapeHtml(heading)+'</h3><div class="record-subject-grid">'+groups.map(([name,items])=>'<article class="record-subject-card"><h4>'+escapeHtml(name)+'</h4>'+items.map((b)=>'<div class="record-card-entry"><button class="table-source" data-source="'+escapeHtml(b.id)+'">PDF '+b.page+'쪽</button><p>'+escapeHtml(b.summary||b.text).replace(/\n/g,'<br>')+'</p></div>').join('')+'</article>').join('')+'</div></section>';
- target.querySelectorAll('[data-source]').forEach((button)=>button.onclick=()=>{state.activeBlockId=button.dataset.source;recordTab='원문';saveState();renderCanvas();});
+ $$('.record-tabs button').forEach((button)=>button.setAttribute('aria-pressed',String(button.textContent===recordTab)));
+ ['#canvas-source-document','#canvas-source-title','.canvas-source-meta','.canvas-source-toolbar'].forEach((selector)=>$(selector).hidden=true);
+ $('#cross-link-layer').style.display='none';
+ const prepared=(block)=>!state.preparedRecordVersion||block.id.startsWith('prepared-');
+ const bundled=(block)=>/출결|수상|자격|학폭|학교폭력|봉사/.test(block.section);
+ let blocks=[];
+ if(recordTab==='기록 묶음')blocks=state.blocks.filter((block)=>prepared(block)&&bundled(block));
+ else if(recordTab==='창체')blocks=state.blocks.filter((block)=>prepared(block)&&/창의|창체/.test(block.section));
+ else {const [grade,semester]=recordTab.split(' ');blocks=state.blocks.filter((block)=>prepared(block)&&/세부능력|교과학습/.test(block.section)&&block.grade===grade&&normalizeSemester(block.semester)===semester);}
+ if(!blocks.length){target.innerHTML='<p class="record-empty">등록된 내용이 없습니다.</p>';return;}
+ if(recordTab==='기록 묶음'){
+   target.innerHTML='<section class="record-card-section"><h3>기록 묶음</h3><table class="record-bundle-table"><thead><tr><th>영역</th><th>학년</th><th>내용</th></tr></thead><tbody>'+blocks.map((block)=>'<tr><td>'+escapeHtml(block.section)+'</td><td>'+escapeHtml(block.grade)+'</td><td>'+escapeHtml(block.text).replace(/\n/g,'<br>')+'</td></tr>').join('')+'</tbody></table></section>';return;
+ }
+ const key=(block)=>recordTab==='창체'?block.grade+' · '+block.subject:block.subject;
+ const grouped=new Map();blocks.forEach((block)=>{const name=key(block);if(!grouped.has(name))grouped.set(name,[]);grouped.get(name).push(block);});
+ target.innerHTML='<section class="record-card-section"><h3>'+escapeHtml(recordTab)+'</h3><div class="record-subject-grid">'+[...grouped].map(([name,items])=>'<article class="record-subject-card"><h4>'+escapeHtml(name)+'</h4>'+items.map((block)=>'<div class="record-card-entry"><p>'+escapeHtml(block.text).replace(/\n/g,'<br>')+'</p></div>').join('')+'</article>').join('')+'</div></section>';
 }
 async function loadPreparedRecord(){
  try{
   const response=await fetch('./record-data.json');if(!response.ok)return;const data=await response.json();
-  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab=semesterTabs()[0] || '기록 묶음';window.refreshRecordTabs?.();renderAll();renderCanvas();};
+  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab='1학년 1학기';renderAll();renderCanvas();};
   if(!hadSavedData){state.blocks=[];state.notes=[];state.questions=[];state.highlights=[];load();}
   else if(state.preparedRecordVersion!==data.version){const button=document.createElement('button');button.className='secondary-button';button.textContent='정리된 생기부 불러오기';button.onclick=()=>{load();button.remove();};$('.canvas-primary-actions').append(button);}
  }catch(error){console.error('정리된 생기부 읽기 실패',error);}
