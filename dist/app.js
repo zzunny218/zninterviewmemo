@@ -643,10 +643,12 @@ function renderCanvas() {
       ? `<button class="node-category-icon category-change" type="button" title="클릭해서 카테고리 변경" aria-label="현재 ${escapeHtml(item.category)} 카테고리. 클릭해서 변경">${categoryIcon(item.category)}</button>`
       : `<span class="node-category-icon" aria-label="${escapeHtml(item.category)} 카테고리">${categoryIcon(item.category)}</span>`;
     const actions = item.kind === "note"
-      ? `<button class="node-mini collapse-node" type="button" aria-label="${item.collapsed ? "펼치기" : "접기"}">${item.collapsed ? "+" : "−"}</button><button class="node-mini edit-node" type="button" aria-label="메모 열기">↗</button>`
-      : `<button class="node-mini open-insight" type="button" aria-label="${escapeHtml(item.category)} 열기">↗</button>`;
+      ? `<input class="node-border-color" type="color" value="${escapeHtml(item.color || "#5865f2")}" aria-label="메모 테두리 색상"><button class="node-mini collapse-node" type="button" aria-label="${item.collapsed ? "펼치기" : "접기"}">${item.collapsed ? "+" : "−"}</button>`
+      : "";
     const connector = item.kind === "note" ? `<button class="node-connector" type="button" aria-label="다른 메모로 연결선 드래그"></button>` : "";
-    node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}<span class="category-pill">${escapeHtml(item.category)}</span></div><div class="node-actions">${actions}</div></div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.body || "")}</p><div class="tag-row">${(item.tags || []).slice(0, 3).map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}</div>${connector}`;
+    const editTitle = item.kind === "note" ? 'class="node-title-edit" contenteditable="plaintext-only" spellcheck="true"' : "";
+    const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="plaintext-only" spellcheck="true"' : "";
+    node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}<span class="category-pill">${escapeHtml(item.category)}</span></div><div class="node-actions">${actions}</div></div><h3 ${editTitle}>${escapeHtml(item.title)}</h3><p ${editBody}>${escapeHtml(item.body || "")}</p><div class="tag-row">${(item.tags || []).slice(0, 3).map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}</div>${connector}`;
     enableNodeDrag(node, item);
     if (item.kind === "note") {
       $(".category-change", node).addEventListener("click", (event) => {
@@ -663,17 +665,31 @@ function renderCanvas() {
         saveState();
         renderCanvas();
       });
-      $(".edit-node", node).addEventListener("click", (event) => { event.stopPropagation(); openNoteDialog(item.sourceNote); });
-      enableConnectorDrag($(".node-connector", node), item.id);
-    } else {
-      $(".open-insight", node).addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (item.kind === "question") {
-          state.activeQuestionId = item.questionId;
-          routeTo("interview");
-        } else if (item.kind === "persona") routeTo("persona");
-        else routeTo("persona");
+      const titleEdit = $(".node-title-edit", node);
+      const bodyEdit = $(".node-body-edit", node);
+      titleEdit.addEventListener("pointerdown", (event) => event.stopPropagation());
+      bodyEdit.addEventListener("pointerdown", (event) => event.stopPropagation());
+      titleEdit.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); titleEdit.blur(); } });
+      bodyEdit.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") bodyEdit.blur(); });
+      titleEdit.addEventListener("blur", () => {
+        item.sourceNote.title = titleEdit.textContent.trim() || "제목 없음";
+        saveState();
+        renderCanvasFilters();
       });
+      bodyEdit.addEventListener("blur", () => {
+        item.sourceNote.body = bodyEdit.textContent.trim();
+        saveState();
+        renderCanvasFilters();
+      });
+      $(".node-border-color", node).addEventListener("input", (event) => {
+        event.stopPropagation();
+        item.sourceNote.color = event.target.value;
+        node.style.setProperty("--note-color", event.target.value);
+        node.style.borderColor = event.target.value;
+        saveState();
+      });
+      $(".node-border-color", node).addEventListener("pointerdown", (event) => event.stopPropagation());
+      enableConnectorDrag($(".node-connector", node), item.id);
     }
     layer.appendChild(node);
   });
@@ -686,42 +702,40 @@ function renderCanvas() {
 }
 
 function renderCanvasFilters(items = canvasItems()) {
-  const categories = ["전체", ...new Set(items.map((item) => item.category))];
-  const categoryBox = $("#canvas-category-filter");
-  if (!categoryBox) return;
-  categoryBox.innerHTML = "";
-  categories.forEach((category) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `canvas-category-button${canvasFilters.category === category ? " is-active" : ""}`;
-    button.innerHTML = `<span>${category === "전체" ? "◉" : categoryIcon(category)}</span>${escapeHtml(category)}`;
-    button.onclick = () => { canvasFilters.category = category; renderCanvasFilters(items); applyCanvasFilters(); };
-    categoryBox.appendChild(button);
-  });
-  const grades = ["전체", ...new Set(state.blocks.map((block) => block.grade))];
-  const subjects = ["전체", ...new Set(state.blocks.map((block) => block.subject))];
-  const gradeSelect = $("#canvas-grade-filter");
-  const subjectSelect = $("#canvas-subject-filter");
-  gradeSelect.innerHTML = grades.map((value) => `<option ${canvasFilters.grade === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
-  subjectSelect.innerHTML = subjects.map((value) => `<option ${canvasFilters.subject === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
-  gradeSelect.onchange = () => { canvasFilters.grade = gradeSelect.value; applyCanvasFilters(); renderCanvasResults(items); };
-  subjectSelect.onchange = () => { canvasFilters.subject = subjectSelect.value; applyCanvasFilters(); renderCanvasResults(items); };
   const search = $("#canvas-filter-search");
+  const suggestions = $("#canvas-search-suggestions");
+  if (!search || !suggestions) return;
+  const values = [...new Set([
+    ...state.blocks.map((block) => block.grade),
+    ...state.blocks.map((block) => block.subject),
+    "캐릭터", "질문", "진로", "활동", "탐구", "성장", "협업", "자유 메모"
+  ])];
+  suggestions.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
   search.value = canvasFilters.query;
-  search.oninput = () => { canvasFilters.query = search.value.trim().toLowerCase(); applyCanvasFilters(); renderCanvasResults(items); };
-  renderCanvasResults(items);
+  search.oninput = () => {
+    canvasFilters.query = search.value.trim().toLowerCase();
+    applyCanvasFilters();
+  };
+  search.onkeydown = (event) => {
+    if (event.key !== "Enter") return;
+    const query = search.value.trim().toLowerCase();
+    const match = state.blocks.find((block) => `${block.grade} ${block.subject} ${block.section} ${block.text}`.toLowerCase().includes(query));
+    if (match) {
+      state.activeBlockId = match.id;
+      saveState();
+      renderCanvas();
+      requestAnimationFrame(() => $("#canvas-filter-search")?.focus());
+    }
+  };
 }
 
 function canvasItemMatches(item) {
-  const queryOk = !canvasFilters.query || `${item.title} ${item.body || ""} ${(item.tags || []).join(" ")}`.toLowerCase().includes(canvasFilters.query);
-  const categoryOk = canvasFilters.category === "전체" || item.category === canvasFilters.category;
-  const gradeOk = canvasFilters.grade === "전체" || item.context.grades.includes(canvasFilters.grade);
-  const subjectOk = canvasFilters.subject === "전체" || item.context.subjects.includes(canvasFilters.subject);
-  return queryOk && categoryOk && gradeOk && subjectOk;
+  const haystack = `${item.title} ${item.body || ""} ${(item.tags || []).join(" ")} ${item.category} ${item.context.grades.join(" ")} ${item.context.subjects.join(" ")}`.toLowerCase();
+  return !canvasFilters.query || haystack.includes(canvasFilters.query);
 }
 
 function applyCanvasFilters() {
-  const filtering = canvasFilters.query || canvasFilters.category !== "전체" || canvasFilters.grade !== "전체" || canvasFilters.subject !== "전체";
+  const filtering = Boolean(canvasFilters.query);
   canvasItems().forEach((item) => {
     const node = $(`.canvas-node[data-note-id="${CSS.escape(item.id)}"]`);
     if (!node) return;
@@ -1004,7 +1018,7 @@ function exportData() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `기록의결-백업-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = `생기부면접-백업-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(url);
   toast("백업 파일을 내보냈어요.");
@@ -1022,7 +1036,7 @@ function importData(file) {
       renderAll();
       $("#data-dialog").close();
       toast("백업 내용을 불러왔어요.");
-    } catch { toast("올바른 기록의 결 백업 파일이 아니에요."); }
+    } catch { toast("올바른 백업 파일이 아니에요."); }
   };
   reader.readAsText(file);
 }
@@ -1037,10 +1051,42 @@ function renderAll() {
   renderInterview();
 }
 
+function createInlineCanvasNote() {
+  const note = {
+    id: uid("note"),
+    title: "새 메모",
+    body: "",
+    category: "자유 메모",
+    color: "#5865f2",
+    tags: [],
+    anchors: [],
+    links: [],
+    x: 70 + (state.notes.length % 3) * 38,
+    y: 80 + (state.notes.length % 4) * 42,
+    collapsed: false
+  };
+  state.notes.push(note);
+  saveState();
+  renderCanvas();
+  requestAnimationFrame(() => {
+    const title = $(`.canvas-node[data-note-id="${CSS.escape(note.id)}"] .node-title-edit`);
+    title?.focus();
+    const selection = window.getSelection();
+    if (title && selection) {
+      const range = document.createRange();
+      range.selectNodeContents(title);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  });
+}
+
 function bindEvents() {
   $$(".nav-item").forEach((item) => item.addEventListener("click", () => routeTo(item.dataset.route)));
   $(".brand").addEventListener("click", (event) => { event.preventDefault(); routeTo("canvas"); });
   $("#upload-card").addEventListener("click", () => $("#pdf-input").click());
+  $("#canvas-upload").addEventListener("click", () => $("#pdf-input").click());
+  $("#canvas-new-note").addEventListener("click", createInlineCanvasNote);
   $("#upload-open-button").addEventListener("click", () => $("#pdf-input").click());
   $("#pdf-input").addEventListener("change", (event) => processPdf(event.target.files[0]));
   $("#source-document").addEventListener("contextmenu", showSelectionMenu);
@@ -1105,6 +1151,17 @@ function bindEvents() {
   $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(1.5, canvasZoom + .1); renderCanvas(); });
   $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(.6, canvasZoom - .1); renderCanvas(); });
   $("#canvas-reset").addEventListener("click", () => { canvasZoom = 1; renderCanvas(); });
+  $("#canvas-stage").addEventListener("wheel", (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    canvasZoom = Math.max(.5, Math.min(1.8, canvasZoom + (event.deltaY < 0 ? .1 : -.1)));
+    renderCanvas();
+  }, { passive: false });
+  $("#canvas-stage").addEventListener("keydown", (event) => {
+    if (event.key === "+" || event.key === "=") { event.preventDefault(); canvasZoom = Math.min(1.8, canvasZoom + .1); renderCanvas(); }
+    if (event.key === "-") { event.preventDefault(); canvasZoom = Math.max(.5, canvasZoom - .1); renderCanvas(); }
+    if (event.key === "0") { event.preventDefault(); canvasZoom = 1; renderCanvas(); }
+  });
   $("#close-note-panel").addEventListener("click", () => $("#note-panel").classList.remove("open"));
   $("#show-all-button").addEventListener("click", openSearch);
   document.addEventListener("keydown", (event) => {

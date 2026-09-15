@@ -5,16 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="학교생활기록부 원문을 근거로 활동, 캐릭터, 면접 답변을 연결하는 개인 지식관리 도구" />
     <meta name="theme-color" content="#10281f" />
-    <title>기록의 결 — 생기부 면접 노트</title>
+    <title>생기부 면접 캔버스</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="#canvas" aria-label="기록의 결 통합 화면">
+        <a class="brand" href="#canvas" aria-label="통합 화면">
           <span class="brand-mark" aria-hidden="true">결</span>
-          <span>기록의 결</span>
+
         </a>
         <nav class="main-nav" aria-label="주요 메뉴">
           <button class="nav-item" data-route="record" type="button">생기부</button>
@@ -99,9 +99,12 @@
 
         <section id="canvas-view" class="route-view canvas-view is-active" aria-label="생기부와 메모 통합 캔버스">
           <div class="canvas-toolbar">
-            <div><span class="eyebrow">원문과 생각이 만나는 곳</span><h1>생기부 · 메모 통합 캔버스</h1></div>
+            <div class="canvas-primary-actions">
+              <button id="canvas-upload" class="secondary-button" type="button">PDF</button>
+              <button id="canvas-new-note" class="primary-button" type="button">＋ 메모</button>
+            </div>
             <div class="canvas-tools">
-              <button id="canvas-reset" class="secondary-button" type="button">화면 맞춤</button>
+              <button id="canvas-reset" class="secondary-button" type="button" aria-label="화면 맞춤">맞춤</button>
               <span class="zoom-label" id="zoom-label">100%</span>
               <button id="zoom-out" class="icon-button" type="button" aria-label="축소">−</button>
               <button id="zoom-in" class="icon-button" type="button" aria-label="확대">＋</button>
@@ -110,29 +113,22 @@
           <div id="canvas-split" class="canvas-split">
             <section class="canvas-source-pane" aria-label="캔버스와 함께 보는 생기부">
               <div class="canvas-source-toolbar">
-                <div><span class="eyebrow">왼쪽 원문</span><strong>근거를 보며 연결하기</strong></div>
                 <select id="canvas-block-select" aria-label="생기부 원문 선택"></select>
               </div>
               <div class="canvas-source-scroll">
                 <div class="canvas-source-meta"><span id="canvas-source-section"></span><b id="canvas-source-page"></b></div>
                 <h2 id="canvas-source-title"></h2>
                 <article id="canvas-source-document" class="canvas-source-document"></article>
-                <p class="canvas-source-guide"><span></span> 색칠된 문장과 오른쪽 메모가 선으로 연결돼요.</p>
               </div>
             </section>
-            <div id="canvas-stage" class="canvas-stage">
+            <div id="canvas-stage" class="canvas-stage" tabindex="0" aria-label="메모 캔버스. 컨트롤 키와 마우스 휠 또는 확대 축소 버튼을 사용할 수 있습니다.">
               <svg id="edge-layer" class="edge-layer" aria-hidden="true"></svg>
               <div id="node-layer" class="node-layer"></div>
               <p id="canvas-empty" class="canvas-empty" hidden>메모를 만들면 이곳에 생각의 지도가 생겨요.</p>
             </div>
-            <aside class="canvas-filter-pane" aria-label="캔버스 검색과 강조">
-              <label class="canvas-search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 4 4"></path></svg><input id="canvas-filter-search" placeholder="원문·메모 검색" /></label>
-              <div class="filter-section"><span>카테고리</span><div id="canvas-category-filter" class="category-filter-grid"></div></div>
-              <div class="filter-section filter-selects">
-                <label><span>학년</span><select id="canvas-grade-filter"></select></label>
-                <label><span>과목</span><select id="canvas-subject-filter"></select></label>
-              </div>
-              <div class="filter-section result-section"><div class="filter-result-head"><span>탐색 결과</span><b id="canvas-result-count"></b></div><div id="canvas-filter-results" class="canvas-filter-results"></div></div>
+            <aside class="canvas-filter-pane" aria-label="검색">
+              <label class="canvas-search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 4 4"></path></svg><input id="canvas-filter-search" list="canvas-search-suggestions" placeholder="검색" autocomplete="off" /></label>
+              <datalist id="canvas-search-suggestions"></datalist>
             </aside>
             <svg id="cross-link-layer" class="cross-link-layer" aria-label="생기부 원문과 메모의 연결선"></svg>
           </div>
