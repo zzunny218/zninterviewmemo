@@ -924,6 +924,16 @@ function renderAnswerPanel() {
     button.addEventListener("click", () => selectBlock(block.id, anchor.quote));
     list.appendChild(button);
   }));
+  (question.sourceIds || []).forEach((sourceId) => {
+    const block = state.blocks.find((item) => item.id === sourceId);
+    if (!block || notes.some((note) => note.anchors.some((anchor) => anchor.blockId === sourceId))) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "evidence-chip";
+    button.textContent = `${block.subject} ${block.page}쪽 · ${String(block.summary || block.text).slice(0, 24)}…`;
+    button.addEventListener("click", () => selectBlock(block.id));
+    list.appendChild(button);
+  });
 }
 
 function generateQuestions() {
@@ -945,6 +955,27 @@ function generateQuestions() {
   saveState();
   renderInterview();
   toast("메모와 원문 근거로 질문 5개를 만들었어요.");
+}
+
+function aiEvidenceSources() {
+  const useful = state.blocks.filter((block) => block.id.startsWith("prepared-") && /창의적 체험활동상황|세부능력 및 특기사항|행동특성 및 종합의견/.test(block.section));
+  return useful.slice(0, 55).map((block) => ({ sourceId: block.id, grade: block.grade, section: block.section, subject: block.subject, semester: block.semester || "", excerpt: String(block.summary || block.text || "").slice(0, 420) }));
+}
+function aiNotePayload() { return state.notes.map((note) => ({ noteId: note.id, title: note.title, body: String(note.body || "").slice(0, 700), category: note.category, sourceIds: (note.anchors || []).map((anchor) => anchor.blockId).filter((id) => id.startsWith("prepared-")) })).filter((note) => note.title || note.body); }
+function makeAiAnchors(sourceIds) { return sourceIds.map((id) => state.blocks.find((block) => block.id === id)).filter(Boolean).map((block) => ({ blockId: block.id, quote: String(block.summary || block.text || "").slice(0, 160), page: block.page, color: "#5865f2" })); }
+async function requestAi(action) {
+  const sources = aiEvidenceSources(); if (!sources.length) throw new Error("정리된 생기부 원문을 먼저 불러와 주세요.");
+  const response = await fetch("/api/assist", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, notes: aiNotePayload(), sources }) });
+  const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || "AI 분석 요청에 실패했습니다."); return data;
+}
+async function runAi(action, button) {
+  button.disabled = true; const original = button.textContent; button.textContent = "분석 중";
+  try {
+    const result = await requestAi(action), validSources = new Set(aiEvidenceSources().map((source) => source.sourceId));
+    if (action === "links") { let count = 0; (result.links || []).forEach((link) => { const from = state.notes.find((note) => note.id === link.fromNoteId), to = state.notes.find((note) => note.id === link.toNoteId); if (from && to && from !== to && (link.sourceIds || []).some((id) => validSources.has(id)) && !from.links.includes(to.id)) { from.links.push(to.id); count += 1; } }); saveState(); renderCanvas(); toast(count ? "근거가 있는 메모 연결 " + count + "개를 만들었어요." : "새로 연결할 만큼 뚜렷한 메모 관계가 없어요."); }
+    if (action === "analysis") { state.notes = state.notes.filter((note) => !note.aiGeneratedPersona); const themes = (result.themes || []).filter((theme) => theme.title && (theme.sourceIds || []).some((id) => validSources.has(id))).slice(0, 3); themes.forEach((theme, index) => state.notes.push({ id: uid("note"), title: theme.title, body: theme.description || "", category: "캐릭터", color: "#5865f2", tags: [], anchors: makeAiAnchors(theme.sourceIds.filter((id) => validSources.has(id))), links: [], x: 650 + index * 44, y: 130 + index * 58, collapsed: false, aiGeneratedPersona: true })); saveState(); renderAll(); renderCanvas(); toast(themes.length ? "근거가 연결된 캐릭터 " + themes.length + "개를 정리했어요." : "근거가 충분한 캐릭터를 찾지 못했어요."); }
+    if (action === "questions") { const questions = (result.questions || []).filter((item) => item.question && (item.sourceIds || []).some((id) => validSources.has(id))).slice(0, 6); state.questions = questions.map((item) => ({ id: uid("q"), type: item.type || "탐구", question: item.question, noteIds: (item.noteIds || []).filter((id) => state.notes.some((note) => note.id === id)), sourceIds: item.sourceIds.filter((id) => validSources.has(id)), draft: "" })); state.activeQuestionId = state.questions[0]?.id || null; state.questionFilter = "전체"; saveState(); renderInterview(); toast(questions.length ? "근거가 연결된 예상 질문 " + questions.length + "개를 만들었어요." : "근거가 충분한 질문을 만들지 못했어요."); }
+  } catch (error) { toast(error.message || "AI 분석을 다시 시도해 주세요."); } finally { button.disabled = false; button.textContent = original; }
 }
 
 function openSearch() {
@@ -1048,6 +1079,8 @@ function bindEvents() {
   $("#upload-card").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-upload").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-new-note").addEventListener("click", createInlineCanvasNote);
+  $("#ai-link-notes").addEventListener("click", (event) => runAi("links", event.currentTarget));
+  $("#ai-analyze-record").addEventListener("click", (event) => runAi("analysis", event.currentTarget));
   $("#upload-open-button").addEventListener("click", () => $("#pdf-input").click());
   $("#pdf-input").addEventListener("change", (event) => processPdf(event.target.files[0]));
   $("#source-document").addEventListener("contextmenu", showSelectionMenu);
@@ -1112,7 +1145,7 @@ function bindEvents() {
     toast("샘플 상태로 되돌렸어요.");
   });
   $("#refresh-persona").addEventListener("click", () => { renderPersonas(); toast("현재 근거로 캐릭터를 다시 정리했어요."); });
-  $("#generate-questions").addEventListener("click", generateQuestions);
+  $("#generate-questions").addEventListener("click", (event) => runAi("questions", event.currentTarget));
   $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(1.5, canvasZoom + .1); renderCanvas(); });
   $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(.6, canvasZoom - .1); renderCanvas(); });
   $("#canvas-reset").addEventListener("click", () => { fitCanvas(); });
