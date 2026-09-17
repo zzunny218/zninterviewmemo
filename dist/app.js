@@ -582,7 +582,7 @@ function renderCrossLinks() {
 function categoryIcon(category) {
   return ({ "탐구": "⌕", "성장": "↗", "협업": "◫", "진로": "◆", "자유 메모": "✦", "활동": "⚡", "캐릭터": "◎", "면접 질문": "?" })[category] || "•";
 }
-function installStyleMenu(node,note){const trigger=$(".node-style-trigger",node),popover=$(".node-style-popover",node);trigger.onclick=(event)=>{event.stopPropagation();popover.hidden=!popover.hidden;};popover.onclick=(event)=>{const icon=event.target.closest("[data-category]"),color=event.target.closest("[data-color]");if(icon)note.category=icon.dataset.category;if(color)note.color=color.dataset.color;if(!icon&&!color)return;saveState();renderCanvas();};}
+function installStyleMenu(node,note){const trigger=$(".node-style-trigger",node),popover=$(".node-style-popover",node);trigger.onclick=(event)=>{event.stopPropagation();popover.hidden=!popover.hidden;};popover.onclick=(event)=>{const icon=event.target.closest("[data-category]"),color=event.target.closest("[data-color]");if(icon)note.category=icon.dataset.category;if(color)note.color=color.dataset.color;if(!icon&&!color)return;saveState();renderCanvas();};$(".style-spectrum",popover).oninput=(event)=>{note.color=event.target.value;saveState();renderCanvas();};}
 
 function noteContext(note) {
   const blocks = note.anchors.map((anchor) => state.blocks.find((block) => block.id === anchor.blockId)).filter(Boolean);
@@ -654,15 +654,15 @@ function renderCanvas() {
       ? `<button class="node-mini collapse-node" type="button" aria-label="${item.collapsed ? "펼치기" : "접기"}">${item.collapsed ? "+" : "−"}</button>`
       : "";
     const connector = "";
-    const editTitle = item.kind === "note" ? 'class="node-title-edit" contenteditable="plaintext-only" spellcheck="true"' : "";
-    const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="true" spellcheck="true"' : "";
+    const editTitle = item.kind === "note" ? 'class="node-title-edit" contenteditable="false" spellcheck="true"' : "";
+    const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="false" spellcheck="true"' : "";
     node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}</div><div class="node-actions">${actions}</div></div><h3 ${editTitle}>${escapeHtml(item.title)}</h3><div ${editBody}>${safeNoteHtml(item.bodyHtml || escapeHtml(item.body || ""))}</div>${connector}`;
     enableNodeDrag(node, item);
     node.addEventListener("dblclick",(event)=>{if(event.target.closest("button,[contenteditable]"))return;focusCanvasNote(node);});
     if (item.kind === "note") {
       const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
       const categories=["탐구","성장","협업","진로","자유 메모","활동","캐릭터","면접 질문"]; const colors=["#5865f2","#57a5e5","#48a986","#e5a94e","#db6b83","#b18ae8"];
-      popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\">"+categoryIcon(category)+"</button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div>"; node.append(popover);
+      popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\">"+categoryIcon(category)+"</button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div><input class=\"style-spectrum\" type=\"color\" value=\""+(item.color||"#5865f2")+"\" aria-label=\"메모 색상 직접 선택\">"; node.append(popover);
       installStyleMenu(node, item.sourceNote);
       $(".collapse-node", node).addEventListener("click", (event) => {
         event.stopPropagation();
@@ -674,17 +674,18 @@ function renderCanvas() {
       const bodyEdit = $(".node-body-edit", node);
       installFormatting(node, bodyEdit, item.sourceNote);
       if(item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=(block?.subject || '원문')+' '+anchor.page+'쪽';button.onclick=()=>{state.activeBlockId=anchor.blockId;recordTab=/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester);saveState();renderCanvas();};evidence.append(button);});node.append(evidence);}
-      titleEdit.addEventListener("pointerdown", (event) => event.stopPropagation());
-      bodyEdit.addEventListener("pointerdown", (event) => event.stopPropagation());
+      [titleEdit,bodyEdit].forEach((editor)=>editor.addEventListener("dblclick",(event)=>{event.stopPropagation();editor.contentEditable="true";editor.focus();}));
       titleEdit.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); titleEdit.blur(); } });
       bodyEdit.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") bodyEdit.blur(); });
       titleEdit.addEventListener("blur", () => {
         item.sourceNote.title = titleEdit.textContent.trim() || "제목 없음";
+        titleEdit.contentEditable="false";
         saveState();
         renderCanvasFilters();
       });
       bodyEdit.addEventListener("blur", () => {
         item.sourceNote.body = bodyEdit.textContent.trim();
+        bodyEdit.contentEditable="false";
         item.sourceNote.bodyHtml = safeNoteHtml(bodyEdit.innerHTML);
         saveState();
         renderCanvasFilters();
@@ -772,7 +773,7 @@ function renderCanvasResults(items = canvasItems()) {
 
 function enableNodeDrag(node, note) {
   node.addEventListener("pointerdown", (event) => {
-    if(event.button!==0 || event.target.closest("button,input,[contenteditable]"))return;
+    if(event.button!==0 || event.target.closest("button,input,[contenteditable=\"true\"]"))return;
     event.preventDefault(); event.stopPropagation(); node.setPointerCapture(event.pointerId); node.classList.add("dragging"); movingNodeId=note.id;
     const start={x:event.clientX,y:event.clientY,left:parseFloat(node.style.left),top:parseFloat(node.style.top),time:performance.now()};let target={x:start.left,y:start.top},velocity={x:0,y:0},last={x:start.left,y:start.top,time:start.time},frame=0;
     const paint=()=>{const x=parseFloat(node.style.left),y=parseFloat(node.style.top);node.style.left=(x+(target.x-x)*.48)+"px";node.style.top=(y+(target.y-y)*.48)+"px";storeNodePosition(node);renderEdges();if(Math.abs(target.x-parseFloat(node.style.left))+Math.abs(target.y-parseFloat(node.style.top))>.2)frame=requestAnimationFrame(paint);else frame=0;};
@@ -1088,7 +1089,7 @@ function bindEvents() {
       const anchor={...selectedAnchor};createInlineCanvasNote();const note=state.notes.at(-1);note.title=suggestTitle(anchor.quote);note.anchors.push(anchor);note.color=$("#selection-color").value;applyHighlight(anchor,note.id,note.color);saveState();renderCanvas();
     }
     if (action === "link") openLinkDialog(selectedAnchor);
-    if (action === "highlight") { applyHighlight(selectedAnchor); toast("문장을 하이라이트했어요."); }
+
   }));
   $("#new-note-button").addEventListener("click", () => openNoteDialog());
   $("#inline-new-note").addEventListener("click", () => openNoteDialog());
