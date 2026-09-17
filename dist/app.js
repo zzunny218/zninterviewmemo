@@ -126,6 +126,8 @@ let activePdfUrl = null;
 let toastTimer = null;
 let canvasZoom = 1;
 let canvasPan = {x:0,y:0};
+let graphMode = false;
+let selectedGraphNoteId = null;
 let movingNodeId = null;
 let layoutFrame = null;
 let canvasFilters = { query: "", category: "전체", grade: "전체", subject: "전체" };
@@ -371,7 +373,7 @@ function saveNoteFromForm() {
     if (anchor && !note.anchors.some((item) => item.blockId === anchor.blockId && item.quote === anchor.quote)) note.anchors.push(anchor);
     if (anchor) applyHighlight(anchor, id, payload.color);
   } else {
-    const note = { id: uid("note"), ...payload, anchors: anchor ? [anchor] : [], links: [], x: 180 + state.notes.length * 42, y: 110 + state.notes.length * 34, collapsed: false };
+    const note = { id: uid("note"), ...payload, canvasTab:recordTab, anchors: anchor ? [anchor] : [], links: [], x: 180 + state.notes.length * 42, y: 110 + state.notes.length * 34 };
     state.notes.push(note);
     if (anchor) applyHighlight(anchor, note.id, payload.color);
   }
@@ -589,9 +591,44 @@ function noteContext(note) {
   return { grades: [...new Set(blocks.map((block) => block.grade))], subjects: [...new Set(blocks.map((block) => block.subject))] };
 }
 
+function noteCanvas(note){
+ if(RECORD_TABS.includes(note.canvasTab))return note.canvasTab;
+ const anchor=(note.anchors||[])[0];const block=state.blocks.find(item=>item.id===anchor?.blockId);
+ if(!block)return '1학년 1학기';
+ if(/창의|창체/.test(block.section))return '창체';
+ if(/출결|수상|자격|학폭|학교폭력|봉사/.test(block.section))return '기록 묶음';
+ const tab=block.grade+' '+normalizeSemester(block.semester);
+ return RECORD_TABS.includes(tab)?tab:'1학년 1학기';
+}
+function saveCanvasView(){state.canvasViews||={};state.canvasViews[recordTab]={pan:{...canvasPan},zoom:canvasZoom};saveState();}
+function switchCanvas(tab){
+ if(tab===recordTab)return;
+ saveCanvasView();recordTab=tab;state.activeCanvasTab=tab;graphMode=false;selectedGraphNoteId=null;
+ $("#canvas-graph")?.setAttribute("aria-pressed","false");
+ const view=state.canvasViews?.[tab];canvasPan=view?.pan?{...view.pan}:{x:0,y:0};canvasZoom=view?.zoom||1;
+ saveState();renderCanvas();
+}
+function graphCoordinates(items){
+ const positions=new Map(),count=items.length;
+ items.forEach((item,i)=>{const angle=i*2.399963229728653,r=80+Math.sqrt(i)*95;positions.set(item.id,{x:370+Math.cos(angle)*r,y:290+Math.sin(angle)*r});});
+ const edges=[];items.forEach(item=>(item.links||[]).forEach(id=>{if(positions.has(id))edges.push([item.id,id]);}));
+ for(let step=0;step<90;step++){
+  const forces=new Map(items.map(item=>[item.id,{x:0,y:0}]));
+  for(let i=0;i<count;i++)for(let j=i+1;j<count;j++){const a=positions.get(items[i].id),b=positions.get(items[j].id),dx=a.x-b.x,dy=a.y-b.y,d2=Math.max(100,dx*dx+dy*dy),force=17000/d2,dist=Math.sqrt(d2);forces.get(items[i].id).x+=dx/dist*force;forces.get(items[i].id).y+=dy/dist*force;forces.get(items[j].id).x-=dx/dist*force;forces.get(items[j].id).y-=dy/dist*force;}
+  edges.forEach(([aId,bId])=>{const a=positions.get(aId),b=positions.get(bId),dx=b.x-a.x,dy=b.y-a.y,dist=Math.max(1,Math.hypot(dx,dy)),force=(dist-180)*.012;forces.get(aId).x+=dx/dist*force;forces.get(aId).y+=dy/dist*force;forces.get(bId).x-=dx/dist*force;forces.get(bId).y-=dy/dist*force;});
+  items.forEach(item=>{const p=positions.get(item.id),f=forces.get(item.id);p.x+=Math.max(-12,Math.min(12,f.x));p.y+=Math.max(-12,Math.min(12,f.y));});
+ }
+ return positions;
+}
+function jumpToNote(id){
+ const note=state.notes.find(item=>item.id===id);if(!note)return;
+ if(noteCanvas(note)!==recordTab)switchCanvas(noteCanvas(note));
+ graphMode=false;renderCanvas();requestAnimationFrame(()=>{const node=$('.canvas-node[data-note-id="'+CSS.escape(id)+'"]');if(node)focusCanvasNote(node);});
+}
+
 function canvasItems() {
   state.canvasPositions ||= {};
-  const noteItems = state.notes.map((note) => ({ ...note, kind: "note", context: noteContext(note), sourceNote: note }));
+  const noteItems = state.notes.filter(note=>noteCanvas(note)===recordTab).map((note) => ({ ...note, kind: "note", context: noteContext(note), sourceNote: note }));
   const personas = derivePersonas().slice(0, 0).map((persona, index) => {
     const notes = persona.noteIds.map((id) => state.notes.find((note) => note.id === id)).filter(Boolean);
     const anchors = notes.flatMap((note) => note.anchors);
@@ -622,7 +659,7 @@ function canvasItems() {
     ...(state.canvasPositions["canvas-activity-lead"] || { x: 45, y: 495 }),
     virtual: true
   }] : [];
-  return [...noteItems, ...activities, ...personas, ...questions];
+  return noteItems;
 }
 
 function renderCanvas() {
@@ -633,11 +670,13 @@ function renderCanvas() {
   layer.style.transform = `translate(${canvasPan.x}px, ${canvasPan.y}px) scale(${canvasZoom})`;
   $("#zoom-label").textContent = `${Math.round(canvasZoom * 100)}%`;
   const items = canvasItems();
+  const graphPositions=graphMode?graphCoordinates(items):null;
+  $("#canvas-stage").classList.toggle("graph-mode",graphMode);
   $("#canvas-empty").hidden = items.length > 0;
   items.forEach((item) => {
     const node = document.createElement("article");
     const kindClass = item.kind === "persona" ? " persona-node" : item.kind === "question" ? " question-node" : item.kind === "activity" ? " activity-node" : "";
-    node.className = `canvas-node${item.collapsed ? " collapsed" : ""}${kindClass}`;
+    node.className = `canvas-node${kindClass}${graphMode?" graph-node":""}`;
     node.dataset.noteId = item.id;
     node.dataset.category = item.category;
     node.dataset.search = `${item.title} ${item.body || ""} ${(item.tags || []).join(" ")}`.toLowerCase();
@@ -645,36 +684,33 @@ function renderCanvas() {
     node.dataset.subjects = item.context.subjects.join(",");
     node.style.setProperty("--note-color", item.color || "#5865f2");
     node.style.borderTopColor = item.color || "#5865f2";
-    node.style.left = `${item.x ?? 120}px`;
-    node.style.top = `${item.y ?? 120}px`;
+    node.style.left = `${graphPositions?.get(item.id)?.x ?? item.x ?? 120}px`;
+    node.style.top = `${graphPositions?.get(item.id)?.y ?? item.y ?? 120}px`;
     const categoryControl = item.kind === "note"
       ? `<button class="node-category-icon node-style-trigger" type="button" title="아이콘·색 변경" aria-label="아이콘과 색 변경">${categoryIcon(item.category)}</button>`
       : `<span class="node-category-icon" aria-label="${escapeHtml(item.category)} 카테고리">${categoryIcon(item.category)}</span>`;
-    const actions = item.kind === "note"
-      ? `<button class="node-mini collapse-node" type="button" aria-label="${item.collapsed ? "펼치기" : "접기"}">${item.collapsed ? "+" : "−"}</button>`
-      : "";
+    const actions = item.kind === "note" && !graphMode ? `<button class="node-mini note-links" type="button" aria-label="연결된 메모">↗</button>` : "";
     const connector = "";
     const editTitle = item.kind === "note" ? 'class="node-title-edit" contenteditable="false" spellcheck="true"' : "";
     const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="false" spellcheck="true"' : "";
     node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}</div><div class="node-actions">${actions}</div></div><h3 ${editTitle}>${escapeHtml(item.title)}</h3><div ${editBody}>${safeNoteHtml(item.bodyHtml || escapeHtml(item.body || ""))}</div>${connector}`;
-    enableNodeDrag(node, item);
+    if(!graphMode)enableNodeDrag(node, item);
+    else node.addEventListener("click",()=>jumpToNote(item.id));
     node.addEventListener("dblclick",(event)=>{if(event.target.closest("button,[contenteditable]"))return;focusCanvasNote(node);});
     if (item.kind === "note") {
       const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
       const categories=["탐구","성장","협업","진로","자유 메모","활동","캐릭터","면접 질문"]; const colors=["#5865f2","#57a5e5","#48a986","#e5a94e","#db6b83","#b18ae8"];
       popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\">"+categoryIcon(category)+"</button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div><input class=\"style-spectrum\" type=\"color\" value=\""+(item.color||"#5865f2")+"\" aria-label=\"메모 색상 직접 선택\">"; node.append(popover);
       installStyleMenu(node, item.sourceNote);
-      $(".collapse-node", node).addEventListener("click", (event) => {
-        event.stopPropagation();
-        item.sourceNote.collapsed = !item.sourceNote.collapsed;
-        saveState();
-        renderCanvas();
-      });
+      if(!graphMode){
+        const linksButton=$(".note-links",node);
+        linksButton.addEventListener("click",event=>{event.stopPropagation();showNoteRelations(node,item.sourceNote);});
+      }
       const titleEdit = $(".node-title-edit", node);
       const bodyEdit = $(".node-body-edit", node);
-      installFormatting(node, bodyEdit, item.sourceNote);
-      if(item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=(block?.subject || '원문')+' '+anchor.page+'쪽';button.onclick=()=>{state.activeBlockId=anchor.blockId;recordTab=/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester);saveState();renderCanvas();};evidence.append(button);});node.append(evidence);}
-      [titleEdit,bodyEdit].forEach((editor)=>editor.addEventListener("dblclick",(event)=>{event.stopPropagation();editor.contentEditable="true";editor.focus();}));
+      if(!graphMode)installFormatting(node, bodyEdit, item.sourceNote);
+      if(!graphMode&&item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=(block?.subject || '원문')+' '+anchor.page+'쪽';button.onclick=()=>{state.activeBlockId=anchor.blockId;switchCanvas(/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester));};evidence.append(button);});node.append(evidence);}
+      if(!graphMode)[titleEdit,bodyEdit].forEach((editor)=>editor.addEventListener("dblclick",(event)=>{event.stopPropagation();editor.contentEditable="true";editor.focus();}));
       titleEdit.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); titleEdit.blur(); } });
       bodyEdit.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") bodyEdit.blur(); });
       titleEdit.addEventListener("blur", () => {
@@ -698,8 +734,23 @@ function renderCanvas() {
     renderEdges();
     renderCrossLinks();
     applyCanvasFilters();
-    settleNodes();
+    if(!graphMode)settleNodes();
   });
+}
+
+function showNoteRelations(node,note){
+ const existing=node.querySelector('.note-relations');if(existing){existing.remove();return;}
+ const panel=document.createElement('div');panel.className='note-relations';
+ const incoming=state.notes.filter(other=>(other.links||[]).includes(note.id));
+ const outgoing=(note.links||[]).map(id=>state.notes.find(other=>other.id===id)).filter(Boolean);
+ panel.innerHTML='<div class="relation-head"><strong>메모 연결</strong><button type="button" class="relation-close" aria-label="닫기">×</button></div><div class="relation-list"></div><button type="button" class="relation-add">＋ 메모 연결</button><label class="relation-move">캔버스 이동<select aria-label="메모 캔버스 이동">'+RECORD_TABS.map(tab=>'<option value="'+escapeHtml(tab)+'"'+(noteCanvas(note)===tab?' selected':'')+'>'+escapeHtml(tab)+'</option>').join('')+'</select></label>';
+ const list=panel.querySelector('.relation-list');
+ [...outgoing.map(other=>({other,label:'↗'})),...incoming.map(other=>({other,label:'↩'}))].forEach(({other,label})=>{const button=document.createElement('button');button.type='button';button.textContent=label+' '+other.title+' · '+noteCanvas(other);button.onclick=()=>jumpToNote(other.id);list.append(button);});
+ if(!list.children.length)list.textContent='연결된 메모 없음';
+ panel.querySelector('.relation-close').onclick=()=>panel.remove();
+ panel.querySelector('.relation-add').onclick=()=>{list.innerHTML='';state.notes.filter(other=>other.id!==note.id&&!(note.links||[]).includes(other.id)).forEach(other=>{const button=document.createElement('button');button.type='button';button.textContent=other.title+' · '+noteCanvas(other);button.onclick=()=>{note.links||=[];note.links.push(other.id);saveState();renderCanvas();};list.append(button);});};
+ panel.querySelector('select').onchange=event=>{note.canvasTab=event.target.value;saveState();renderCanvas();};
+ node.append(panel);
 }
 
 function renderCanvasFilters(items = canvasItems()) {
@@ -785,7 +836,7 @@ function enableNodeDrag(node, note) {
 }
 function focusCanvasNote(node){
  const stage=$('#canvas-stage');const zoom=Math.min(1.5,Math.max(canvasZoom,1.15));const target={x:stage.clientWidth/2-(parseFloat(node.style.left)+node.offsetWidth/2)*zoom,y:stage.clientHeight/2-(parseFloat(node.style.top)+node.offsetHeight/2)*zoom};const from={...canvasPan,zoom:canvasZoom};const began=performance.now();
- const step=(now)=>{const t=Math.min(1,(now-began)/260),ease=1-Math.pow(1-t,3);canvasZoom=from.zoom+(zoom-from.zoom)*ease;canvasPan.x=from.x+(target.x-from.x)*ease;canvasPan.y=from.y+(target.y-from.y)*ease;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';$('#zoom-label').textContent=Math.round(canvasZoom*100)+'%';renderEdges();if(t<1)requestAnimationFrame(step);};requestAnimationFrame(step);
+ const step=(now)=>{const t=Math.min(1,(now-began)/260),ease=1-Math.pow(1-t,3);canvasZoom=from.zoom+(zoom-from.zoom)*ease;canvasPan.x=from.x+(target.x-from.x)*ease;canvasPan.y=from.y+(target.y-from.y)*ease;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';$('#zoom-label').textContent=Math.round(canvasZoom*100)+'%';renderEdges();if(t<1)requestAnimationFrame(step);else saveCanvasView();};requestAnimationFrame(step);
 }
 
 function enableConnectorDrag(handle, sourceId) {
@@ -834,11 +885,11 @@ function renderEdges(){
  const draw=(id,targetId)=>{
   const key=[id,targetId].sort().join('::');if(drawn.has(key))return;drawn.add(key);
   const a=$('.canvas-node[data-note-id="'+CSS.escape(id)+'"]'),b=$('.canvas-node[data-note-id="'+CSS.escape(targetId)+'"]');if(!a||!b)return;
-  const points=closestPoints(a.getBoundingClientRect(),b.getBoundingClientRect()).map(point=>({x:point.x-origin.left,y:point.y-origin.top}));
+  const ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();const points=[{x:ar.left+ar.width/2-origin.left,y:ar.top+ar.height/2-origin.top},{x:br.left+br.width/2-origin.left,y:br.top+br.height/2-origin.top}];
   const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',curvedPath(...points));svg.append(path);
  };
- state.notes.forEach(n=>n.links.forEach(id=>draw(n.id,id)));
- canvasItems().filter(n=>n.virtual).forEach(n=>(n.noteIds||[]).forEach(id=>draw(id,n.id)));
+ canvasItems().forEach(n=>(n.links||[]).forEach(id=>draw(n.id,id)));
+
 }
 
 function renderPersonas() {
@@ -1036,6 +1087,7 @@ function renderAll() {
 function createInlineCanvasNote() {
   const note = {
     id: uid("note"),
+    canvasTab:recordTab,
     title: "새 메모",
     body: "",
     category: "자유 메모",
@@ -1052,7 +1104,7 @@ function createInlineCanvasNote() {
   renderCanvas();
   requestAnimationFrame(() => {
     const title = $(`.canvas-node[data-note-id="${CSS.escape(note.id)}"] .node-title-edit`);
-    title?.focus();
+    if(title){title.contentEditable="true";title.focus();}
     const selection = window.getSelection();
     if (title && selection) {
       const range = document.createRange();
@@ -1069,6 +1121,7 @@ function bindEvents() {
   $("#upload-card").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-upload").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-new-note").addEventListener("click", createInlineCanvasNote);
+  $("#canvas-graph").addEventListener("click",()=>{graphMode=!graphMode;$("#canvas-graph").setAttribute("aria-pressed",String(graphMode));renderCanvas();});
   $("#upload-open-button").addEventListener("click", () => $("#pdf-input").click());
   $("#pdf-input").addEventListener("change", (event) => processPdf(event.target.files[0]));
   $("#source-document").addEventListener("contextmenu", showSelectionMenu);
@@ -1134,9 +1187,9 @@ function bindEvents() {
   });
   $("#refresh-persona").addEventListener("click", () => { renderPersonas(); toast("현재 근거로 캐릭터를 다시 정리했어요."); });
   
-  $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(1.5, canvasZoom + .1); renderCanvas(); });
-  $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(.6, canvasZoom - .1); renderCanvas(); });
-  $("#canvas-reset").addEventListener("click", () => { fitCanvas(); });
+  $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(1.5, canvasZoom + .1); saveCanvasView(); renderCanvas(); });
+  $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(.6, canvasZoom - .1); saveCanvasView(); renderCanvas(); });
+  $("#canvas-reset").addEventListener("click", () => { fitCanvas(); saveCanvasView(); });
   $("#canvas-stage").addEventListener("wheel", (event) => {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
@@ -1182,12 +1235,12 @@ function installFormatting(node,editor,note){
  const text=document.createElement('button');text.type='button';text.className='format-icon format-text-color';text.textContent='A';text.title='글자 색';text.style.setProperty('--tool-color',note.textColor||'#e34b55');const textMenu=picker('text-color-menu',color=>{note.textColor=color;text.style.setProperty('--tool-color',color);saveState();});text.onpointerdown=e=>{e.preventDefault();remember();};text.onclick=()=>{const sel=restore();if(!sel.rangeCount||sel.getRangeAt(0).collapsed)return;document.execCommand('foreColor',false,note.textColor||'#e34b55');persist();};text.oncontextmenu=e=>{e.preventDefault();textMenu.hidden=!textMenu.hidden;};toolbar.append(text,textMenu);toolbar.insertBefore(text,high);toolbar.insertBefore(textMenu,high);editor.before(toolbar);editor.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,e.clipboardData.getData('text/plain'));persist();});
 }
 function storeNodePosition(node){
- const position={x:parseFloat(node.style.left)||0,y:parseFloat(node.style.top)||0};
+ if(graphMode)return;const position={x:parseFloat(node.style.left)||0,y:parseFloat(node.style.top)||0};
  const note=state.notes.find(n=>n.id===node.dataset.noteId);
  if(note)Object.assign(note,position);else {state.canvasPositions||={};state.canvasPositions[node.dataset.noteId]=position;}
 }
 function settleNodes(){
- if(layoutFrame)return;let frames=0;
+ if(graphMode||layoutFrame)return;let frames=0;
  const tick=()=>{
   const nodes=$$('#node-layer .canvas-node');let changed=false;
   const gap=24;
@@ -1201,7 +1254,7 @@ function settleNodes(){
    const force=(matchMedia('(prefers-reduced-motion:reduce)').matches?1:.25);const amount=(Math.min(ox,oy)+.5)*force;
    const shareA=lockA?0:lockB?1:.5,shareB=lockB?0:lockA?1:.5;
    if(ox<oy){const sign=dx>=0?1:-1;ax+=amount*sign*shareA;bx-=amount*sign*shareB;}else{const sign=dy>=0?1:-1;ay+=amount*sign*shareA;by-=amount*sign*shareB;}
-   a.style.left=ax+'px';a.style.top=ay+'px';b.style.left=bx+'px';b.style.top=by+'px';
+   a.style.left=Math.max(16,ax)+'px';a.style.top=Math.max(16,ay)+'px';b.style.left=Math.max(16,bx)+'px';b.style.top=Math.max(16,by)+'px';
   }
   nodes.forEach(storeNodePosition);renderEdges();renderCrossLinks();frames++;
   if((changed||movingNodeId)&&frames<600)layoutFrame=requestAnimationFrame(tick);else{layoutFrame=null;saveState();}
@@ -1213,7 +1266,7 @@ function installCanvasPan(){
   const start={x:e.clientX,y:e.clientY,px:canvasPan.x,py:canvasPan.y};let target={...canvasPan},velocity={x:0,y:0},last={...canvasPan,time:performance.now()},frame=0;
   const paint=()=>{canvasPan.x+=(target.x-canvasPan.x)*.42;canvasPan.y+=(target.y-canvasPan.y)*.42;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();if(Math.abs(target.x-canvasPan.x)+Math.abs(target.y-canvasPan.y)>.2)frame=requestAnimationFrame(paint);else frame=0;};
   const move=ev=>{const now=performance.now();target={x:start.px+ev.clientX-start.x,y:start.py+ev.clientY-start.y};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
-  const glide=()=>{velocity.x*=.91;velocity.y*=.91;canvasPan.x+=velocity.x;canvasPan.y+=velocity.y;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)requestAnimationFrame(glide);};
+  const glide=()=>{velocity.x*=.91;velocity.y*=.91;canvasPan.x+=velocity.x;canvasPan.y+=velocity.y;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)requestAnimationFrame(glide);else saveCanvasView();};
   const up=()=>{stage.classList.remove('panning');stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',up);stage.removeEventListener('pointercancel',up);if(frame)cancelAnimationFrame(frame);requestAnimationFrame(glide);};stage.addEventListener('pointermove',move);stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
  });
 }
@@ -1223,7 +1276,7 @@ const RECORD_TABS=['1학년 1학기','1학년 2학기','2학년 1학기','2학�
 function normalizeSemester(value=''){const match=String(value).match(/[12]학기|[12]·[12]학기/);return match?match[0]:'학기 미정';}
 function installRecordTabs(){
  const toolbar=$('.canvas-source-toolbar'),tabs=document.createElement('div');tabs.className='record-tabs';
- RECORD_TABS.forEach((label)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=()=>{recordTab=label;renderCanvas();};tabs.append(button);});
+ RECORD_TABS.forEach((label)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=()=>switchCanvas(label);tabs.append(button);});
  toolbar.before(tabs);toolbar.hidden=true;
  const table=document.createElement('div');table.id='record-table';$('.canvas-source-scroll').prepend(table);table.addEventListener('contextmenu',showSelectionMenu);
 }
@@ -1249,12 +1302,13 @@ function renderRecordTable(){
 async function loadPreparedRecord(){
  try{
   const response=await fetch('./record-data.json');if(!response.ok)return;const data=await response.json();
-  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab='1학년 1학기';renderAll();renderCanvas();};
+  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';renderAll();renderCanvas();};
   if(!hadSavedData){state.blocks=[];state.notes=[];state.questions=[];state.highlights=[];load();}
   else if(state.preparedRecordVersion!==data.version){const button=document.createElement('button');button.className='secondary-button';button.textContent='정리된 생기부 불러오기';button.onclick=()=>{load();button.remove();};$('.canvas-primary-actions').append(button);}
  }catch(error){console.error('정리된 생기부 읽기 실패',error);}
 }
 
+recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';const initialCanvasView=state.canvasViews?.[recordTab];if(initialCanvasView){canvasPan={...initialCanvasView.pan};canvasZoom=initialCanvasView.zoom||1;}
 bindEvents();installCanvasPan();installRecordTabs();renderAll();routeTo("canvas");loadPreparedRecord();
 
 function fitCanvas(){const nodes=$$('#node-layer .canvas-node');if(!nodes.length){canvasPan={x:0,y:0};canvasZoom=1;renderCanvas();return;}const bounds=nodes.map(n=>({x:parseFloat(n.style.left),y:parseFloat(n.style.top),w:n.offsetWidth,h:n.offsetHeight}));const left=Math.min(...bounds.map(n=>n.x)),top=Math.min(...bounds.map(n=>n.y)),right=Math.max(...bounds.map(n=>n.x+n.w)),bottom=Math.max(...bounds.map(n=>n.y+n.h));const stage=$('#canvas-stage');canvasZoom=Math.min(1.5,Math.max(.2,Math.min((stage.clientWidth-70)/(right-left),(stage.clientHeight-70)/(bottom-top))));canvasPan={x:(stage.clientWidth-(right-left)*canvasZoom)/2-left*canvasZoom,y:(stage.clientHeight-(bottom-top)*canvasZoom)/2-top*canvasZoom};renderCanvas();}
