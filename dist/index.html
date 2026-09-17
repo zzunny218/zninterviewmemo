@@ -19,6 +19,7 @@
         <nav class="main-nav" aria-label="주요 메뉴">
           <button class="nav-item" data-route="record" type="button">생기부</button>
           <button class="nav-item is-active" data-route="canvas" type="button">통합 화면</button>
+          <button class="nav-item" data-route="graph" type="button">전체 그래프</button>
           <button class="nav-item" data-route="persona" type="button">캐릭터</button>
           <button class="nav-item" data-route="interview" type="button">면접</button>
         </nav>
@@ -106,7 +107,7 @@
               <button id="ai-analyze-record" class="secondary-button" type="button" disabled>AI 분석 · 준비 중</button>
             </div>
             <div class="canvas-tools">
-              <button id="canvas-graph" class="secondary-button" type="button" aria-pressed="false">그래프</button>
+              <button id="canvas-graph" class="secondary-button" type="button">전체 그래프</button>
               <button id="canvas-reset" class="secondary-button" type="button" aria-label="화면 맞춤">맞춤</button>
               <span class="zoom-label" id="zoom-label">100%</span>
               <button id="zoom-out" class="icon-button" type="button" aria-label="축소">−</button>
@@ -134,6 +135,17 @@
               <datalist id="canvas-search-suggestions"></datalist>
             </aside>
             <svg id="cross-link-layer" class="cross-link-layer" aria-label="생기부 원문과 메모의 연결선"></svg>
+          </div>
+        </section>
+
+        <section id="graph-view" class="route-view graph-view" aria-label="전체 메모 그래프">
+          <div class="all-graph-toolbar"><button id="all-graph-back" class="secondary-button" type="button">← 캔버스</button><strong>전체 메모 그래프</strong><span id="all-graph-count"></span><span class="all-graph-legend">실선: 연결 · 점선: 유사</span><button id="all-graph-fit" class="secondary-button" type="button">화면 맞춤</button></div>
+          <div class="all-graph-layout">
+            <div id="all-graph-stage" class="all-graph-stage" tabindex="0" aria-label="모든 학기와 과목의 메모 그래프">
+              <div id="all-graph-world" class="all-graph-world"><svg id="all-graph-edges" aria-hidden="true"></svg><div id="all-graph-nodes"></div></div>
+              <p id="all-graph-empty" class="all-graph-empty" hidden>메모가 없습니다.</p>
+            </div>
+            <aside id="all-graph-detail" class="all-graph-detail" aria-label="선택한 메모 내용"><p>메모를 선택하세요.</p></aside>
           </div>
         </section>
 

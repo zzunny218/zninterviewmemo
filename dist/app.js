@@ -130,6 +130,9 @@ let graphMode = false;
 let selectedGraphNoteId = null;
 let movingNodeId = null;
 let layoutFrame = null;
+let allGraphZoom = 1;
+let allGraphPan = {x:0,y:0};
+let selectedAllGraphNoteId = null;
 let canvasFilters = { query: "", category: "전체", grade: "전체", subject: "전체" };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -175,6 +178,7 @@ function routeTo(route) {
   $(`#${route}-view`)?.classList.add("is-active");
   history.replaceState(null, "", `#${route}`);
   if (route === "canvas") renderCanvas();
+  if (route === "graph") renderAllGraph();
   if (route === "persona") renderPersonas();
   if (route === "interview") renderInterview();
 }
@@ -827,11 +831,11 @@ function enableNodeDrag(node, note) {
     if(event.button!==0 || event.target.closest("button,input,[contenteditable=\"true\"]"))return;
     event.preventDefault(); event.stopPropagation(); node.setPointerCapture(event.pointerId); node.classList.add("dragging"); movingNodeId=note.id;
     const start={x:event.clientX,y:event.clientY,left:parseFloat(node.style.left),top:parseFloat(node.style.top),time:performance.now()};let target={x:start.left,y:start.top},velocity={x:0,y:0},last={x:start.left,y:start.top,time:start.time},frame=0;
-    const paint=()=>{const x=parseFloat(node.style.left),y=parseFloat(node.style.top);node.style.left=(x+(target.x-x)*.48)+"px";node.style.top=(y+(target.y-y)*.48)+"px";storeNodePosition(node);renderEdges();if(Math.abs(target.x-parseFloat(node.style.left))+Math.abs(target.y-parseFloat(node.style.top))>.2)frame=requestAnimationFrame(paint);else frame=0;};
+    const paint=()=>{const x=parseFloat(node.style.left),y=parseFloat(node.style.top);node.style.left=(x+(target.x-x)*.48)+"px";node.style.top=(y+(target.y-y)*.48)+"px";storeNodePosition(node);renderEdges();if(!layoutFrame)settleNodes();if(Math.abs(target.x-parseFloat(node.style.left))+Math.abs(target.y-parseFloat(node.style.top))>.2)frame=requestAnimationFrame(paint);else frame=0;};
     const move=e=>{const now=performance.now();target={x:start.left+(e.clientX-start.x)/canvasZoom,y:start.top+(e.clientY-start.y)/canvasZoom};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
     const glide=()=>{velocity.x*=.9;velocity.y*=.9;target.x+=velocity.x;target.y+=velocity.y;node.style.left=target.x+"px";node.style.top=target.y+"px";storeNodePosition(node);renderEdges();if(!layoutFrame)settleNodes();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)requestAnimationFrame(glide);else{settleNodes();saveState();}};
     const up=()=>{node.classList.remove("dragging");movingNodeId=null;node.removeEventListener("pointermove",move);node.removeEventListener("pointerup",up);node.removeEventListener("pointercancel",up);if(frame)cancelAnimationFrame(frame);requestAnimationFrame(glide);};
-    node.addEventListener("pointermove",move);node.addEventListener("pointerup",up);node.addEventListener("pointercancel",up);
+    settleNodes();node.addEventListener("pointermove",move);node.addEventListener("pointerup",up);node.addEventListener("pointercancel",up);
   });
 }
 function focusCanvasNote(node){
@@ -890,6 +894,115 @@ function renderEdges(){
  };
  canvasItems().forEach(n=>(n.links||[]).forEach(id=>draw(n.id,id)));
 
+}
+
+// 글·과목·학기·직접 링크만 사용하므로 외부 API 호출과 토큰 사용이 없다.
+function graphTerms(note) {
+  const text = [note.title, note.body, ...(note.tags || [])].join(' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ');
+  const terms = new Set(text.split(/\s+/).filter(word => word.length > 1));
+  for (const word of [...terms]) if (/^[가-힣]{3,}$/.test(word)) for (let i = 0; i < word.length - 1; i++) terms.add(word.slice(i, i + 2));
+  return terms;
+}
+function graphSimilarity(a, b, terms) {
+  const ac = noteContext(a), bc = noteContext(b);
+  const overlap = [...terms.get(a.id)].filter(term => terms.get(b.id).has(term)).length;
+  const union = new Set([...terms.get(a.id), ...terms.get(b.id)]).size || 1;
+  const sameSubject = ac.subjects.some(subject => bc.subjects.includes(subject));
+  const sameGrade = ac.grades.some(grade => bc.grades.includes(grade));
+  const linked = (a.links || []).includes(b.id) || (b.links || []).includes(a.id);
+  const score = .27 * overlap / union + (sameSubject ? .31 : 0) + (noteCanvas(a) === noteCanvas(b) ? .18 : 0) + (sameGrade ? .1 : 0) + (a.category === b.category ? .08 : 0);
+  return linked ? Math.max(.76, score) : score;
+}
+function allGraphPositions(notes) {
+  const width = 1700, height = 1100, positions = new Map(), terms = new Map(notes.map(note => [note.id, graphTerms(note)]));
+  const groups = [...new Set(notes.map(noteCanvas))];
+  notes.forEach((note, index) => {
+    const group = groups.indexOf(noteCanvas(note)), angle = group * 2 * Math.PI / Math.max(groups.length, 1);
+    const peers = notes.slice(0, index).filter(other => noteCanvas(other) === noteCanvas(note)).length;
+    const offset = peers * 2.39996323;
+    positions.set(note.id, {x:width / 2 + Math.cos(angle) * 350 + Math.cos(offset) * (40 + Math.sqrt(peers) * 65), y:height / 2 + Math.sin(angle) * 300 + Math.sin(offset) * (40 + Math.sqrt(peers) * 65)});
+  });
+  const pairs = [];
+  for (let i = 0; i < notes.length; i++) for (let j = i + 1; j < notes.length; j++) {
+    const score = graphSimilarity(notes[i], notes[j], terms);
+    if (score >= .16) pairs.push({a:notes[i].id,b:notes[j].id,score});
+  }
+  for (let step = 0; step < 115; step++) {
+    const forces = new Map(notes.map(note => [note.id,{x:0,y:0}]));
+    for (let i = 0; i < notes.length; i++) for (let j = i + 1; j < notes.length; j++) {
+      const a = positions.get(notes[i].id), b = positions.get(notes[j].id), dx = a.x - b.x, dy = a.y - b.y;
+      const d2 = Math.max(400, dx * dx + dy * dy), d = Math.sqrt(d2), push = 13500 / d2;
+      forces.get(notes[i].id).x += dx / d * push; forces.get(notes[i].id).y += dy / d * push;
+      forces.get(notes[j].id).x -= dx / d * push; forces.get(notes[j].id).y -= dy / d * push;
+    }
+    for (const pair of pairs) {
+      const a = positions.get(pair.a), b = positions.get(pair.b), dx = b.x - a.x, dy = b.y - a.y, d = Math.max(1,Math.hypot(dx,dy));
+      const pull = (d - (285 - pair.score * 165)) * pair.score * .004;
+      forces.get(pair.a).x += dx / d * pull; forces.get(pair.a).y += dy / d * pull;
+      forces.get(pair.b).x -= dx / d * pull; forces.get(pair.b).y -= dy / d * pull;
+    }
+    notes.forEach(note => { const p = positions.get(note.id), f = forces.get(note.id); p.x = Math.max(85,Math.min(width - 85,p.x + Math.max(-9,Math.min(9,f.x)))); p.y = Math.max(85,Math.min(height - 85,p.y + Math.max(-9,Math.min(9,f.y)))); });
+  }
+  return positions;
+}
+function paintAllGraph() { $("#all-graph-world").style.transform = 'translate(' + allGraphPan.x + 'px,' + allGraphPan.y + 'px) scale(' + allGraphZoom + ')'; }
+function fitAllGraph() {
+  const stage = $("#all-graph-stage");
+  allGraphZoom = Math.min(1, Math.max(.25, Math.min(stage.clientWidth / 1700, stage.clientHeight / 1100) * .92));
+  allGraphPan = {x:(stage.clientWidth - 1700 * allGraphZoom) / 2,y:(stage.clientHeight - 1100 * allGraphZoom) / 2};
+  paintAllGraph();
+}
+function showAllGraphNote(note) {
+  selectedAllGraphNoteId = note.id;
+  $$('#all-graph-nodes .all-graph-item').forEach(node => node.classList.toggle('selected',node.dataset.noteId === note.id));
+  const anchors = (note.anchors || []).map(anchor => {const block = state.blocks.find(item => item.id === anchor.blockId);return '<li>' + escapeHtml([block?.grade,block?.subject,anchor.quote].filter(Boolean).join(' · ')) + '</li>';}).join('');
+  const links = (note.links || []).map(id => state.notes.find(item => item.id === id)).filter(Boolean);
+  const panel = $("#all-graph-detail");
+  panel.innerHTML = '<span class="graph-detail-meta">' + escapeHtml(noteCanvas(note)) + ' · ' + escapeHtml(noteContext(note).subjects.join(', ') || note.category) + '</span><h2>' + escapeHtml(note.title) + '</h2><div class="graph-detail-body">' + safeNoteHtml(note.bodyHtml || escapeHtml(note.body || '')) + '</div>' + (anchors ? '<h3>근거</h3><ul>' + anchors + '</ul>' : '') + (links.length ? '<h3>연결</h3><div class="graph-detail-links"></div>' : '') + '<button type="button" class="primary-button graph-open-note">캔버스에서 열기</button>';
+  const linkBox = panel.querySelector('.graph-detail-links');
+  links.forEach(other => {const button = document.createElement('button');button.type='button';button.textContent=other.title;button.onclick=()=>showAllGraphNote(other);linkBox?.append(button);});
+  panel.querySelector('.graph-open-note').onclick=()=>{routeTo('canvas');jumpToNote(note.id);};
+}
+function renderAllGraph() {
+  const notes = state.notes, nodes = $("#all-graph-nodes"), edges = $("#all-graph-edges");
+  nodes.innerHTML='';edges.innerHTML='';$("#all-graph-empty").hidden=notes.length>0;
+  $("#all-graph-count").textContent=notes.length+'개 메모';
+  const positions=allGraphPositions(notes), known=new Set(notes.map(note=>note.id)), drawn=new Set();
+  notes.forEach(note=>{
+    const p=positions.get(note.id), anchor=(note.anchors||[])[0], block=state.blocks.find(item=>item.id===anchor?.blockId), subject=block?.subject||'자유';
+    const item=document.createElement('button');item.type='button';item.className='all-graph-item';item.dataset.noteId=note.id;
+    item.style.left=(p.x-42)+'px';item.style.top=(p.y-42)+'px';item.style.setProperty('--graph-color',/^#[0-9a-fA-F]{6}$/.test(note.color||'')?note.color:'#5865f2');
+    item.innerHTML='<span class="all-graph-circle"><span>'+escapeHtml(noteCanvas(note))+'</span><span>'+escapeHtml(subject)+'</span></span><span class="all-graph-title">'+escapeHtml(note.title)+'</span>';
+    item.onclick=()=>showAllGraphNote(note);nodes.append(item);
+    (note.links||[]).forEach(id=>{if(!known.has(id))return;const key=[note.id,id].sort().join('::');if(drawn.has(key))return;drawn.add(key);const q=positions.get(id),line=document.createElementNS('http://www.w3.org/2000/svg','line');line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.append(line);});
+  });
+  // 유사 관계는 그래프에만 그리며 메모의 실제 연결 목록을 바꾸지 않는다.
+  const terms=new Map(notes.map(note=>[note.id,graphTerms(note)])),suggestions=[];
+  for(let i=0;i<notes.length;i++)for(let j=i+1;j<notes.length;j++){
+    const a=notes[i],b=notes[j],key=[a.id,b.id].sort().join('::');if(drawn.has(key))continue;
+    const score=graphSimilarity(a,b,terms);if(score>=.4)suggestions.push({a:a.id,b:b.id,score});
+  }
+  const neighbors=new Map();suggestions.sort((a,b)=>b.score-a.score).forEach(({a,b})=>{
+    if((neighbors.get(a)||0)>=3||(neighbors.get(b)||0)>=3)return;
+    neighbors.set(a,(neighbors.get(a)||0)+1);neighbors.set(b,(neighbors.get(b)||0)+1);
+    const p=positions.get(a),q=positions.get(b),line=document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.classList.add('similarity-link');line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.prepend(line);
+  });
+  if(notes.length)showAllGraphNote(notes.find(note=>note.id===selectedAllGraphNoteId)||notes[0]);
+  else $("#all-graph-detail").innerHTML='<p>메모를 선택하세요.</p>';
+  requestAnimationFrame(fitAllGraph);
+}
+function installAllGraphPan() {
+  const stage = $("#all-graph-stage");
+  stage.addEventListener('pointerdown',event=>{
+    if(event.button!==0||event.target.closest('.all-graph-item'))return;
+    stage.setPointerCapture(event.pointerId);stage.classList.add('panning');
+    const start={x:event.clientX,y:event.clientY,panX:allGraphPan.x,panY:allGraphPan.y};
+    const move=e=>{allGraphPan={x:start.panX+e.clientX-start.x,y:start.panY+e.clientY-start.y};paintAllGraph();};
+    const up=()=>{stage.classList.remove('panning');stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',up);stage.removeEventListener('pointercancel',up);};
+    stage.addEventListener('pointermove',move);stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
+  });
+  stage.addEventListener('wheel',event=>{event.preventDefault();const rect=stage.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,next=Math.min(2,Math.max(.2,allGraphZoom*(event.deltaY<0?1.1:.9)));allGraphPan={x:x-(x-allGraphPan.x)*next/allGraphZoom,y:y-(y-allGraphPan.y)*next/allGraphZoom};allGraphZoom=next;paintAllGraph();},{passive:false});
 }
 
 function renderPersonas() {
@@ -1121,7 +1234,10 @@ function bindEvents() {
   $("#upload-card").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-upload").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-new-note").addEventListener("click", createInlineCanvasNote);
-  $("#canvas-graph").addEventListener("click",()=>{graphMode=!graphMode;$("#canvas-graph").setAttribute("aria-pressed",String(graphMode));renderCanvas();});
+  $("#canvas-graph").addEventListener("click",()=>routeTo("graph"));
+  $("#all-graph-fit").addEventListener("click",fitAllGraph);
+  $("#all-graph-back").addEventListener("click",()=>routeTo("canvas"));
+  installAllGraphPan();
   $("#upload-open-button").addEventListener("click", () => $("#pdf-input").click());
   $("#pdf-input").addEventListener("change", (event) => processPdf(event.target.files[0]));
   $("#source-document").addEventListener("contextmenu", showSelectionMenu);
@@ -1249,7 +1365,7 @@ function settleNodes(){
    const dx=(ax+a.offsetWidth/2)-(bx+b.offsetWidth/2),dy=(ay+a.offsetHeight/2)-(by+b.offsetHeight/2);
    const ox=(a.offsetWidth+b.offsetWidth)/2+gap-Math.abs(dx),oy=(a.offsetHeight+b.offsetHeight)/2+gap-Math.abs(dy);
    if(ox<=.3||oy<=.3)continue;changed=true;
-   const lockA=a.dataset.noteId===movingNodeId||a.contains(document.activeElement),lockB=b.dataset.noteId===movingNodeId||b.contains(document.activeElement);
+   const lockA=a.dataset.noteId===movingNodeId||(!movingNodeId&&a.contains(document.activeElement)),lockB=b.dataset.noteId===movingNodeId||(!movingNodeId&&b.contains(document.activeElement));
    if(lockA&&lockB)continue;
    const force=(matchMedia('(prefers-reduced-motion:reduce)').matches?1:.25);const amount=(Math.min(ox,oy)+.5)*force;
    const shareA=lockA?0:lockB?1:.5,shareB=lockB?0:lockA?1:.5;
@@ -1302,13 +1418,13 @@ function renderRecordTable(){
 async function loadPreparedRecord(){
  try{
   const response=await fetch('./record-data.json');if(!response.ok)return;const data=await response.json();
-  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';renderAll();renderCanvas();};
+  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';renderAll();renderCanvas();if($("#graph-view").classList.contains("is-active"))renderAllGraph();};
   if(!hadSavedData){state.blocks=[];state.notes=[];state.questions=[];state.highlights=[];load();}
   else if(state.preparedRecordVersion!==data.version){const button=document.createElement('button');button.className='secondary-button';button.textContent='정리된 생기부 불러오기';button.onclick=()=>{load();button.remove();};$('.canvas-primary-actions').append(button);}
  }catch(error){console.error('정리된 생기부 읽기 실패',error);}
 }
 
 recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';const initialCanvasView=state.canvasViews?.[recordTab];if(initialCanvasView){canvasPan={...initialCanvasView.pan};canvasZoom=initialCanvasView.zoom||1;}
-bindEvents();installCanvasPan();installRecordTabs();renderAll();routeTo("canvas");loadPreparedRecord();
+bindEvents();installCanvasPan();installRecordTabs();renderAll();routeTo(location.hash==="#graph"?"graph":"canvas");loadPreparedRecord();
 
 function fitCanvas(){const nodes=$$('#node-layer .canvas-node');if(!nodes.length){canvasPan={x:0,y:0};canvasZoom=1;renderCanvas();return;}const bounds=nodes.map(n=>({x:parseFloat(n.style.left),y:parseFloat(n.style.top),w:n.offsetWidth,h:n.offsetHeight}));const left=Math.min(...bounds.map(n=>n.x)),top=Math.min(...bounds.map(n=>n.y)),right=Math.max(...bounds.map(n=>n.x+n.w)),bottom=Math.max(...bounds.map(n=>n.y+n.h));const stage=$('#canvas-stage');canvasZoom=Math.min(1.5,Math.max(.2,Math.min((stage.clientWidth-70)/(right-left),(stage.clientHeight-70)/(bottom-top))));canvasPan={x:(stage.clientWidth-(right-left)*canvasZoom)/2-left*canvasZoom,y:(stage.clientHeight-(bottom-top)*canvasZoom)/2-top*canvasZoom};renderCanvas();}
