@@ -444,3 +444,6 @@ mark.source-highlight.linked{color:var(--link-color,#5865f2)!important;text-deco
 
 /* 연결 근거와 메모 상태 */
 mark.source-highlight.linked,.canvas-source-document mark.source-highlight.linked{color:var(--link-color,#5865f2)!important;text-decoration-color:var(--link-color,#5865f2)!important}.canvas-node{box-shadow:0 0 15px rgba(255,255,255,.18),0 10px 26px rgba(0,0,0,.28)}.canvas-node.is-emphasized{box-shadow:0 0 10px rgba(255,255,255,.7),0 0 28px rgba(255,255,255,.4),0 16px 38px rgba(0,0,0,.35)!important}.node-category-icon{border-radius:50%!important;border-color:var(--note-color,#5865f2)!important;box-shadow:0 0 8px color-mix(in srgb,var(--note-color,#5865f2) 60%,transparent)}.style-spectrum{display:block;width:100%;height:26px;margin-top:8px;padding:0;border:0;border-radius:6px;background:transparent;cursor:pointer}.node-title-edit[contenteditable="false"],.node-body-edit[contenteditable="false"]{cursor:grab}.node-title-edit[contenteditable="true"],.node-body-edit[contenteditable="true"]{cursor:text}
+
+/* 텍스트 입력 방식으로 전환: PDF 업로드 진입점 숨김 */
+#canvas-upload,#upload-card,#upload-open-button,#pdf-input{display:none!important}
