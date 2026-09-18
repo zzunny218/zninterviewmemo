@@ -827,12 +827,17 @@ function renderCanvasResults(items = canvasItems()) {
 }
 
 function enableNodeDrag(node, note) {
+  let lastPress=0,lastEditor=null;
   node.addEventListener("pointerdown", (event) => {
+    const editor=event.target.closest('.node-title-edit,.node-body-edit'),now=performance.now();
+    // 한 번 누르면 드래그하고, 같은 글자를 빠르게 두 번 누르면 편집한다.
+    if(editor&&editor===lastEditor&&now-lastPress<420){lastPress=0;lastEditor=null;editor.contentEditable='true';editor.focus();return;}
+    lastPress=now;lastEditor=editor;
     if(event.button!==0 || event.target.closest("button,input,[contenteditable=\"true\"]"))return;
     event.preventDefault(); event.stopPropagation(); node.setPointerCapture(event.pointerId); node.classList.add("dragging"); movingNodeId=note.id;
     const start={x:event.clientX,y:event.clientY,left:parseFloat(node.style.left),top:parseFloat(node.style.top),time:performance.now()};let target={x:start.left,y:start.top},velocity={x:0,y:0},last={x:start.left,y:start.top,time:start.time},frame=0;
     const paint=()=>{const x=parseFloat(node.style.left),y=parseFloat(node.style.top);node.style.left=(x+(target.x-x)*.48)+"px";node.style.top=(y+(target.y-y)*.48)+"px";storeNodePosition(node);renderEdges();if(!layoutFrame)settleNodes();if(Math.abs(target.x-parseFloat(node.style.left))+Math.abs(target.y-parseFloat(node.style.top))>.2)frame=requestAnimationFrame(paint);else frame=0;};
-    const move=e=>{const now=performance.now();target={x:start.left+(e.clientX-start.x)/canvasZoom,y:start.top+(e.clientY-start.y)/canvasZoom};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
+    const move=e=>{const now=performance.now();if(Math.hypot(e.clientX-start.x,e.clientY-start.y)>5){lastPress=0;lastEditor=null;}target={x:start.left+(e.clientX-start.x)/canvasZoom,y:start.top+(e.clientY-start.y)/canvasZoom};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
     const glide=()=>{velocity.x*=.9;velocity.y*=.9;target.x+=velocity.x;target.y+=velocity.y;node.style.left=target.x+"px";node.style.top=target.y+"px";storeNodePosition(node);renderEdges();if(!layoutFrame)settleNodes();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)requestAnimationFrame(glide);else{settleNodes();saveState();}};
     const up=()=>{node.classList.remove("dragging");movingNodeId=null;node.removeEventListener("pointermove",move);node.removeEventListener("pointerup",up);node.removeEventListener("pointercancel",up);if(frame)cancelAnimationFrame(frame);requestAnimationFrame(glide);};
     settleNodes();node.addEventListener("pointermove",move);node.addEventListener("pointerup",up);node.addEventListener("pointercancel",up);
@@ -897,37 +902,87 @@ function renderEdges(){
 }
 
 // 글·과목·학기·직접 링크만 사용하므로 외부 API 호출과 토큰 사용이 없다.
-function graphTerms(note) {
-  const text = [note.title, note.body, ...(note.tags || [])].join(' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ');
-  const terms = new Set(text.split(/\s+/).filter(word => word.length > 1));
-  for (const word of [...terms]) if (/^[가-힣]{3,}$/.test(word)) for (let i = 0; i < word.length - 1; i++) terms.add(word.slice(i, i + 2));
-  return terms;
+const GRAPH_STOPWORDS = new Set([
+  '그리고','그러나','또한','하지만','따라서','때문','통해','이를','이러한','해당','대한','대해','관한','관련','내용','과정','결과','방법','활동','학생','자신','자신의','스스로','다양한','여러','특히','매우','적극적으로','성실히','열심히','흥미','관심','주제','자료','정보','바탕','기반','새','메모','것','것을','것은','것으로','있는','있다','하며','했다','그리고','및'
+]);
+const GRAPH_ACTIVITY_WORDS = /^(설명|발표|탐구|조사|분석|작성|수행|참여|확인|학습|진행|정리|활용|시도)(?:함|하였음|하였다|하고|하는|하여|했음|했다)?$/u;
+function graphWords(text) {
+  const words = String(text || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+  const result = [];
+  for (let word of words) {
+    if (GRAPH_STOPWORDS.has(word) || GRAPH_ACTIVITY_WORDS.test(word)) continue;
+    if (/^[가-힣]{3,}$/u.test(word)) word = word.replace(/(?:에게서|으로|에서|에게|까지|부터|처럼|보다|께서|이나|라도|은|는|이|가|을|를|의|에|과|와|도|만|로)$/u, '');
+    if (word.length < 2 || GRAPH_STOPWORDS.has(word) || GRAPH_ACTIVITY_WORDS.test(word)) continue;
+    result.push(word);
+    // 조사 변화로 붙은 긴 단어도 비교하되, 조각의 영향은 낮게 준다.
+    if (/^[가-힣]{4,}$/u.test(word)) for (let i = 0; i < word.length - 1; i++) result.push('~' + word.slice(i, i + 2));
+  }
+  return result;
 }
-function graphSimilarity(a, b, terms) {
+function graphTerms(note) {
+  const profile = { all:new Map(), priority:new Map(), source:new Map() };
+  const add = (value, weight, lane) => {
+    for (const word of graphWords(value)) {
+      const amount = word.startsWith('~') ? weight * .22 : weight;
+      profile.all.set(word, Math.min(24, (profile.all.get(word) || 0) + amount));
+      if (lane) profile[lane].set(word, Math.min(24, (profile[lane].get(word) || 0) + amount));
+    }
+  };
+  add(note.title, 5, 'priority');
+  (note.tags || []).forEach(tag => add(tag, 5, 'priority'));
+  add(note.body, 1.25);
+  if (note.bodyHtml) {
+    const holder = document.createElement('div'); holder.innerHTML = safeNoteHtml(note.bodyHtml);
+    holder.querySelectorAll('b,strong,u,mark,span[style*="color"]').forEach(element => add(element.textContent, 4, 'priority'));
+  }
+  (note.anchors || []).forEach(anchor => {
+    add(anchor.quote, 3.5, 'source');
+    const block = state.blocks.find(item => item.id === anchor.blockId);
+    if (block?.text) add(block.text, 1.35, 'source');
+  });
+  return profile;
+}
+function graphShared(a, b) {
+  let shared = 0;
+  for (const [term, weight] of a) shared += Math.min(weight, b.get(term) || 0);
+  return shared;
+}
+function graphSimilarity(a, b, profiles) {
+  const one = profiles.get(a.id), two = profiles.get(b.id);
+  const shared = graphShared(one.all, two.all);
+  let total = 0, sharedCount = 0;
+  for (const term of new Set([...one.all.keys(), ...two.all.keys()])) {
+    total += Math.max(one.all.get(term) || 0, two.all.get(term) || 0);
+    if (one.all.has(term) && two.all.has(term) && !term.startsWith('~')) sharedCount++;
+  }
   const ac = noteContext(a), bc = noteContext(b);
-  const overlap = [...terms.get(a.id)].filter(term => terms.get(b.id).has(term)).length;
-  const union = new Set([...terms.get(a.id), ...terms.get(b.id)]).size || 1;
   const sameSubject = ac.subjects.some(subject => bc.subjects.includes(subject));
   const sameGrade = ac.grades.some(grade => bc.grades.includes(grade));
+  const sameSource = (a.anchors || []).some(anchor => (b.anchors || []).some(other => anchor.blockId === other.blockId));
   const linked = (a.links || []).includes(b.id) || (b.links || []).includes(a.id);
-  const score = .27 * overlap / union + (sameSubject ? .31 : 0) + (noteCanvas(a) === noteCanvas(b) ? .18 : 0) + (sameGrade ? .1 : 0) + (a.category === b.category ? .08 : 0);
-  return linked ? Math.max(.76, score) : score;
+  // 원문·제목·본문·태그·강조한 단어를 중심에 두고 학기·학년은 소폭만 반영한다.
+  const score = .62 * shared / (total || 1)
+    + .14 * Math.min(1, sharedCount / 7)
+    + .11 * Math.min(1, graphShared(one.priority, two.priority) / 8)
+    + .067 * Math.min(1, graphShared(one.source, two.source) / 12)
+    + (sameSource ? .03 : 0) + (sameSubject ? .03 : 0)
+    + (noteCanvas(a) === noteCanvas(b) ? .012 : 0)
+    + (sameGrade ? .006 : 0) + (a.category === b.category ? .005 : 0);
+  return linked ? Math.max(.78, score) : Math.min(1, score);
 }
 function allGraphPositions(notes) {
   const width = 1700, height = 1100, positions = new Map(), terms = new Map(notes.map(note => [note.id, graphTerms(note)]));
-  const groups = [...new Set(notes.map(noteCanvas))];
+  // 시작 위치를 학기별로 묶지 않아 내용 점수가 실제 배치에 반영되게 한다.
   notes.forEach((note, index) => {
-    const group = groups.indexOf(noteCanvas(note)), angle = group * 2 * Math.PI / Math.max(groups.length, 1);
-    const peers = notes.slice(0, index).filter(other => noteCanvas(other) === noteCanvas(note)).length;
-    const offset = peers * 2.39996323;
-    positions.set(note.id, {x:width / 2 + Math.cos(angle) * 350 + Math.cos(offset) * (40 + Math.sqrt(peers) * 65), y:height / 2 + Math.sin(angle) * 300 + Math.sin(offset) * (40 + Math.sqrt(peers) * 65)});
+    const angle = index * 2.39996323, radius = 70 + Math.sqrt(index) * 105;
+    positions.set(note.id, {x:width / 2 + Math.cos(angle) * radius, y:height / 2 + Math.sin(angle) * radius});
   });
   const pairs = [];
   for (let i = 0; i < notes.length; i++) for (let j = i + 1; j < notes.length; j++) {
     const score = graphSimilarity(notes[i], notes[j], terms);
     if (score >= .16) pairs.push({a:notes[i].id,b:notes[j].id,score});
   }
-  for (let step = 0; step < 115; step++) {
+  for (let step = 0; step < 180; step++) {
     const forces = new Map(notes.map(note => [note.id,{x:0,y:0}]));
     for (let i = 0; i < notes.length; i++) for (let j = i + 1; j < notes.length; j++) {
       const a = positions.get(notes[i].id), b = positions.get(notes[j].id), dx = a.x - b.x, dy = a.y - b.y;
@@ -937,7 +992,7 @@ function allGraphPositions(notes) {
     }
     for (const pair of pairs) {
       const a = positions.get(pair.a), b = positions.get(pair.b), dx = b.x - a.x, dy = b.y - a.y, d = Math.max(1,Math.hypot(dx,dy));
-      const pull = (d - (285 - pair.score * 165)) * pair.score * .004;
+      const pull = (d - (290 - pair.score * 175)) * pair.score * .012;
       forces.get(pair.a).x += dx / d * pull; forces.get(pair.a).y += dy / d * pull;
       forces.get(pair.b).x -= dx / d * pull; forces.get(pair.b).y -= dy / d * pull;
     }
@@ -980,7 +1035,7 @@ function renderAllGraph() {
   const terms=new Map(notes.map(note=>[note.id,graphTerms(note)])),suggestions=[];
   for(let i=0;i<notes.length;i++)for(let j=i+1;j<notes.length;j++){
     const a=notes[i],b=notes[j],key=[a.id,b.id].sort().join('::');if(drawn.has(key))continue;
-    const score=graphSimilarity(a,b,terms);if(score>=.4)suggestions.push({a:a.id,b:b.id,score});
+    const score=graphSimilarity(a,b,terms);if(score>=.28)suggestions.push({a:a.id,b:b.id,score});
   }
   const neighbors=new Map();suggestions.sort((a,b)=>b.score-a.score).forEach(({a,b})=>{
     if((neighbors.get(a)||0)>=3||(neighbors.get(b)||0)>=3)return;
@@ -1331,24 +1386,73 @@ function bindEvents() {
 
 
 function safeNoteHtml(value){
- const tpl=document.createElement('template');tpl.innerHTML=value;
+ const tpl=document.createElement('template');tpl.innerHTML=String(value || '');
+ const validColor=value=>/^#[0-9a-f]{6}$/i.test(value || '') ? value : null;
  const walk=parent=>[...parent.childNodes].forEach(el=>{
   if(el.nodeType!==1)return;
   if(['SCRIPT','STYLE','IFRAME','OBJECT','SVG'].includes(el.tagName)){el.remove();return;}
   walk(el);
-  if(!['B','STRONG','U','MARK','BR','DIV','P','I','EM'].includes(el.tagName)){el.replaceWith(...el.childNodes);return;}
-  [...el.attributes].forEach(a=>{if(!(el.tagName==='SPAN'&&a.name==='style'&&/^color:s*#[0-9a-f]{6};?$/i.test(a.value)))el.removeAttribute(a.name);});
+  if(el.tagName==='FONT'){
+   const span=document.createElement('span'),color=validColor(el.getAttribute('color'));
+   if(color)span.setAttribute('style','color:'+color);
+   span.append(...el.childNodes);el.replaceWith(span);return;
+  }
+  if(!['B','STRONG','U','MARK','BR','DIV','P','I','EM','SPAN'].includes(el.tagName)){el.replaceWith(...el.childNodes);return;}
+  const style=el.getAttribute('style') || '';
+  [...el.attributes].forEach(attribute=>el.removeAttribute(attribute.name));
+  if(el.tagName==='SPAN'){
+   const match=style.match(/(?:^|;)\s*color\s*:\s*(#[0-9a-f]{6})\s*(?:;|$)/i);
+   if(match)el.setAttribute('style','color:'+match[1]);
+   else el.replaceWith(...el.childNodes);
+  }
+  if(el.tagName==='MARK'){
+   const match=style.match(/(?:^|;)\s*--highlight-color\s*:\s*(#[0-9a-f]{6})\s*(?:;|$)/i);
+   if(match)el.setAttribute('style','--highlight-color:'+match[1]);
+   el.classList.add('note-highlight');
+  }
  });walk(tpl.content);return tpl.innerHTML;
 }
+let activeFormattingPicker=null;
+function showFormattingPicker(menu,trigger,onOutside){
+ if(activeFormattingPicker)activeFormattingPicker.close(true);
+ menu.hidden=false;
+ activeFormattingPicker={menu,trigger,close:(commit=true)=>{
+  menu.hidden=true;
+  if(activeFormattingPicker?.menu===menu)activeFormattingPicker=null;
+  if(commit)onOutside?.();
+ }};
+}
+document.addEventListener('pointerdown',event=>{
+ const picker=activeFormattingPicker;
+ if(picker&&!picker.menu.contains(event.target)&&!picker.trigger.contains(event.target))picker.close(true);
+},true);
 function installFormatting(node,editor,note){
  const toolbar=document.createElement('div');toolbar.className='note-formatting';toolbar.setAttribute('role','toolbar');let savedRange=null;
- const remember=()=>{const sel=window.getSelection();if(sel.rangeCount&&editor.contains(sel.getRangeAt(0).commonAncestorContainer))savedRange=sel.getRangeAt(0).cloneRange();};const persist=()=>{note.body=editor.textContent.trim();note.bodyHtml=safeNoteHtml(editor.innerHTML);saveState();settleNodes();};editor.addEventListener('keyup',remember);editor.addEventListener('mouseup',remember);editor.addEventListener('input',persist);
+ const remember=()=>{const sel=window.getSelection();if(sel.rangeCount&&editor.contains(sel.getRangeAt(0).commonAncestorContainer))savedRange=sel.getRangeAt(0).cloneRange();};
+ const persist=()=>{note.body=editor.textContent.trim();note.bodyHtml=safeNoteHtml(editor.innerHTML);saveState();settleNodes();};
+ editor.addEventListener('keyup',remember);editor.addEventListener('mouseup',remember);editor.addEventListener('input',persist);
  const restore=()=>{editor.focus();const sel=window.getSelection();if(savedRange){sel.removeAllRanges();sel.addRange(savedRange);}return sel;};
  const colors=['#e34b55','#3b82f6','#48a986','#e5a94e','#b18ae8'];
- const picker=(klass,apply)=>{const menu=document.createElement('div');menu.className=klass;menu.hidden=true;colors.forEach(color=>{const choice=document.createElement('button');choice.type='button';choice.style.setProperty('--picker-color',color);choice.onclick=()=>{apply(color);menu.hidden=true;};menu.append(choice);});const spectrum=document.createElement('input');spectrum.type='color';spectrum.value='#e34b55';spectrum.oninput=()=>apply(spectrum.value);menu.append(spectrum);return menu;};
- [['B','굵게','bold'],['U','밑줄','underline']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.onpointerdown=e=>{e.preventDefault();remember();};button.onclick=()=>{const sel=restore();if(sel.rangeCount)document.execCommand(command,false,null);persist();};toolbar.append(button);});
- const high=document.createElement('button');high.type='button';high.className='format-icon format-highlight';high.textContent='🖍';high.title='형광펜';const highMenu=picker('highlight-color-menu',color=>{note.highlightColor=color;high.style.setProperty('--tool-color',color);saveState();});high.onpointerdown=e=>{e.preventDefault();remember();};high.onclick=()=>{const sel=restore();if(!sel.rangeCount)return;const range=sel.getRangeAt(0),parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement,mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.className='note-highlight';wrapper.style.setProperty('--highlight-color',note.highlightColor||'#f6dc62');wrapper.append(range.extractContents());range.insertNode(wrapper);}persist();};high.oncontextmenu=e=>{e.preventDefault();highMenu.hidden=!highMenu.hidden;};high.ondblclick=e=>{e.preventDefault();highMenu.hidden=!highMenu.hidden;};toolbar.append(high,highMenu);
- const text=document.createElement('button');text.type='button';text.className='format-icon format-text-color';text.textContent='A';text.title='글자 색';text.style.setProperty('--tool-color',note.textColor||'#e34b55');const textMenu=picker('text-color-menu',color=>{note.textColor=color;text.style.setProperty('--tool-color',color);saveState();});text.onpointerdown=e=>{e.preventDefault();remember();};text.onclick=()=>{const sel=restore();if(!sel.rangeCount||sel.getRangeAt(0).collapsed)return;document.execCommand('foreColor',false,note.textColor||'#e34b55');persist();};text.oncontextmenu=e=>{e.preventDefault();textMenu.hidden=!textMenu.hidden;};toolbar.append(text,textMenu);toolbar.insertBefore(text,high);toolbar.insertBefore(textMenu,high);editor.before(toolbar);editor.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,e.clipboardData.getData('text/plain'));persist();});
+ const picker=(klass,initial,apply,finish)=>{
+  const menu=document.createElement('div');menu.className=klass;menu.hidden=true;
+  colors.forEach(color=>{const choice=document.createElement('button');choice.type='button';choice.style.setProperty('--picker-color',color);choice.setAttribute('aria-label',color+' 선택');choice.onpointerdown=event=>event.preventDefault();choice.onclick=()=>{apply(color);finish();};menu.append(choice);});
+  const spectrum=document.createElement('input');spectrum.type='color';spectrum.value=initial;spectrum.setAttribute('aria-label','스펙트럼에서 색 선택');spectrum.oninput=()=>apply(spectrum.value);menu.append(spectrum);return menu;
+ };
+ [['B','굵게','bold'],['U','밑줄','underline']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.onpointerdown=event=>{event.preventDefault();remember();};button.onclick=()=>{const sel=restore();if(sel.rangeCount)document.execCommand(command,false,null);persist();};toolbar.append(button);});
+ const high=document.createElement('button');high.type='button';high.className='format-icon format-highlight';high.textContent='🖍';high.title='형광펜';high.style.setProperty('--tool-color',note.highlightColor||'#f6dc62');
+ const highMenu=picker('highlight-color-menu',note.highlightColor||'#f6dc62',color=>{note.highlightColor=color;high.style.setProperty('--tool-color',color);saveState();},()=>activeFormattingPicker?.close(false));
+ high.onpointerdown=event=>{event.preventDefault();remember();};
+ high.onclick=()=>{const sel=restore();if(!sel.rangeCount)return;const range=sel.getRangeAt(0),parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement,mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.className='note-highlight';wrapper.style.setProperty('--highlight-color',note.highlightColor||'#f6dc62');wrapper.append(range.extractContents());range.insertNode(wrapper);}persist();};
+ const openHigh=event=>{event.preventDefault();event.stopPropagation();if(activeFormattingPicker?.menu===highMenu)activeFormattingPicker.close(false);else showFormattingPicker(highMenu,high);};
+ high.oncontextmenu=openHigh;high.ondblclick=openHigh;toolbar.append(high,highMenu);
+ const text=document.createElement('button');text.type='button';text.className='format-icon format-text-color';text.textContent='A';text.title='글자 색';text.style.setProperty('--tool-color',note.textColor||'#e34b55');
+ const applyText=()=>{if(!savedRange||savedRange.collapsed||!editor.contains(savedRange.commonAncestorContainer))return;editor.contentEditable='true';const sel=restore();if(!sel.rangeCount)return;document.execCommand('foreColor',false,note.textColor||'#e34b55');persist();editor.contentEditable='false';};
+ const textMenu=picker('text-color-menu',note.textColor||'#e34b55',color=>{note.textColor=color;text.style.setProperty('--tool-color',color);saveState();},()=>activeFormattingPicker?.close(true));
+ text.onpointerdown=event=>{event.preventDefault();remember();};
+ text.onclick=event=>{event.stopPropagation();if(activeFormattingPicker?.menu===textMenu)activeFormattingPicker.close(true);else showFormattingPicker(textMenu,text,applyText);};
+ text.oncontextmenu=event=>{event.preventDefault();text.click();};
+ toolbar.append(text,textMenu);toolbar.insertBefore(text,high);toolbar.insertBefore(textMenu,high);editor.before(toolbar);
+ editor.addEventListener('paste',event=>{event.preventDefault();document.execCommand('insertText',false,event.clipboardData.getData('text/plain'));persist();});
 }
 function storeNodePosition(node){
  if(graphMode)return;const position={x:parseFloat(node.style.left)||0,y:parseFloat(node.style.top)||0};
