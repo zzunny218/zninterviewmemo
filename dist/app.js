@@ -244,8 +244,9 @@ function renderSourceText(block) {
   const paragraph = document.createElement("p");
   paragraph.className = "source-paragraph";
   const highlights = state.highlights
-    .filter((item) => item.blockId === block.id && block.text.includes(item.quote))
-    .map((item) => ({ ...item, start: block.text.indexOf(item.quote), end: block.text.indexOf(item.quote) + item.quote.length }))
+    .filter((item) => item.blockId === block.id)
+    .map((item) => ({ ...item, ...findQuoteRange(block.text, item.quote || "") }))
+    .filter((item) => Number.isInteger(item.start))
     .sort((a, b) => a.start - b.start);
   let cursor = 0;
   highlights.forEach((highlight) => {
@@ -291,11 +292,38 @@ function getSelectionAnchor() {
   const range = selection.getRangeAt(0);
   const sourceDocuments = [$("#source-document"), $("#canvas-source-document"), $("#record-table")].filter(Boolean);
   if (!sourceDocuments.some((article) => article.contains(range.commonAncestorContainer))) return null;
-  const quote = selection.toString().replace(/\s+/g, " ").trim();
+  const quote = selection.toString().trim();
   if (quote.length < 2) return null;
   const selectedElement = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
   const block = state.blocks.find((item) => item.id === selectedElement?.closest("[data-source-block]")?.dataset.sourceBlock) || activeBlock();
-  return { blockId: block.id, quote: quote.slice(0, 500), page: block.page, pages:block.sourcePages || [block.page], grade:block.grade, subject:block.subject, semester:block.semester || "", start:block.text.indexOf(quote), end:block.text.indexOf(quote)+quote.length };
+  const exact = quote.slice(0, 500);
+  const match = findQuoteRange(block.text, exact);
+  return { blockId: block.id, quote: exact, page: block.page, pages:block.sourcePages || [block.page], grade:block.grade, subject:block.subject, semester:block.semester || "", start:match?.start ?? -1, end:match?.end ?? -1 };
+}
+
+function findQuoteRange(text, quote) {
+  const direct = text.indexOf(quote);
+  if (direct >= 0) return { start: direct, end: direct + quote.length };
+  const escaped = quote.trim().split(/\s+/).map((part) => part.split("").map((ch) => "\\.^$*+?()[]{}|".includes(ch) ? "\\" + ch : ch).join("")).join("\\s+");
+  if (!escaped) return null;
+  const match = new RegExp(escaped).exec(text);
+  return match ? { start: match.index, end: match.index + match[0].length } : null;
+}
+
+function renderLinkedBlockText(block) {
+  const links = state.notes.flatMap((note) => (note.anchors || []).filter((anchor) => anchor.blockId === block.id).map((anchor) => {
+    const range = findQuoteRange(block.text, anchor.quote || "");
+    return range && { ...range, note };
+  })).filter(Boolean).sort((a, b) => a.start - b.start);
+  const display = (value) => escapeHtml(value).replace(/\n/g, "<br>");
+  let cursor = 0, html = "";
+  for (const link of links) {
+    if (link.start < cursor) continue;
+    html += display(block.text.slice(cursor, link.start));
+    html += '<mark class="source-highlight linked" data-note-id="' + escapeHtml(link.note.id) + '" style="--link-color:' + escapeHtml(link.note.color || "#5865f2") + '" title="연결된 메모로 이동">' + display(block.text.slice(link.start, link.end)) + '</mark>';
+    cursor = link.end;
+  }
+  return html + display(block.text.slice(cursor));
 }
 
 function showSelectionMenu(event) {
@@ -568,7 +596,7 @@ function renderCrossLinks() {
   if (!svg || !split || innerWidth <= 760) return;
   svg.innerHTML = "";
   const splitRect = split.getBoundingClientRect();
-  $$("#canvas-source-document mark[data-note-id]").forEach((mark) => {
+  document.querySelectorAll("#record-table mark[data-note-id], #canvas-source-document mark[data-note-id]").forEach((mark) => {
     const node = $(`.canvas-node[data-note-id="${CSS.escape(mark.dataset.noteId)}"]`);
     if (!node) return;
     const a = mark.getBoundingClientRect();
@@ -580,7 +608,7 @@ function renderCrossLinks() {
     path.style.stroke = linkColor;
     const points = closestPoints(a,b).map(p=>({x:p.x-splitRect.left,y:p.y-splitRect.top}));
     Object.assign(start,points[0]); Object.assign(end,points[1]);
-    path.setAttribute("d",curvedPath(start,end));
+    path.setAttribute("d",`M ${start.x} ${start.y} L ${end.x} ${end.y}`);
     svg.append(path);
   });
 }
@@ -588,7 +616,19 @@ function renderCrossLinks() {
 function categoryIcon(category) {
   return ({ "탐구": "⌕", "성장": "↗", "협업": "◫", "진로": "◆", "자유 메모": "✦", "활동": "⚡", "캐릭터": "◎", "면접 질문": "?" })[category] || "•";
 }
-function installStyleMenu(node,note){const trigger=$(".node-style-trigger",node),popover=$(".node-style-popover",node);trigger.onclick=(event)=>{event.stopPropagation();popover.hidden=!popover.hidden;};popover.onclick=(event)=>{const icon=event.target.closest("[data-category]"),color=event.target.closest("[data-color]");if(icon)note.category=icon.dataset.category;if(color)note.color=color.dataset.color;if(!icon&&!color)return;saveState();renderCanvas();};$(".style-spectrum",popover).oninput=(event)=>{note.color=event.target.value;saveState();renderCanvas();};}
+function installStyleMenu(node,note){
+  const trigger=$(".node-style-trigger",node),popover=$(".node-style-popover",node);
+  trigger.onclick=(event)=>{event.stopPropagation();popover.hidden=!popover.hidden;};
+  popover.onclick=(event)=>{
+    const icon=event.target.closest("[data-category]"),color=event.target.closest("[data-color]"),relations=event.target.closest(".style-relations");
+    if(relations){popover.hidden=true;showNoteRelations(node,note);return;}
+    if(icon)note.category=icon.dataset.category;
+    if(color)note.color=color.dataset.color;
+    if(!icon&&!color)return;
+    saveState();renderCanvas();
+  };
+  $(".style-spectrum",popover).onchange=(event)=>{note.color=event.target.value;saveState();renderCanvas();};
+}
 
 function noteContext(note) {
   const blocks = note.anchors.map((anchor) => state.blocks.find((block) => block.id === anchor.blockId)).filter(Boolean);
@@ -693,7 +733,7 @@ function renderCanvas() {
     const categoryControl = item.kind === "note"
       ? `<button class="node-category-icon node-style-trigger" type="button" title="아이콘·색 변경" aria-label="아이콘과 색 변경">${categoryIcon(item.category)}</button>`
       : `<span class="node-category-icon" aria-label="${escapeHtml(item.category)} 카테고리">${categoryIcon(item.category)}</span>`;
-    const actions = item.kind === "note" && !graphMode ? `<button class="node-mini note-links" type="button" aria-label="연결된 메모">↗</button>` : "";
+    const actions = item.kind === "note" && !graphMode ? `<button class="node-mini note-delete" type="button" aria-label="메모 삭제" title="메모 삭제">×</button>` : "";
     const connector = "";
     const editTitle = item.kind === "note" ? 'class="node-title-edit" contenteditable="false" spellcheck="true"' : "";
     const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="false" spellcheck="true"' : "";
@@ -704,17 +744,17 @@ function renderCanvas() {
     if (item.kind === "note") {
       const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
       const categories=["탐구","성장","협업","진로","자유 메모","활동","캐릭터","면접 질문"]; const colors=["#5865f2","#57a5e5","#48a986","#e5a94e","#db6b83","#b18ae8"];
-      popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\">"+categoryIcon(category)+"</button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div><input class=\"style-spectrum\" type=\"color\" value=\""+(item.color||"#5865f2")+"\" aria-label=\"메모 색상 직접 선택\">"; node.append(popover);
+      popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\"><span class=\"style-icon-glyph\">"+categoryIcon(category)+"</span><span>"+category+"</span></button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div><input class=\"style-spectrum\" type=\"color\" value=\""+(item.color||"#5865f2")+"\" aria-label=\"메모 색상 직접 선택\"><button type=\"button\" class=\"style-relations\">메모 연결 · 캔버스 이동</button>"; node.append(popover);
       installStyleMenu(node, item.sourceNote);
       if(!graphMode){
-        const linksButton=$(".note-links",node);
-        linksButton.addEventListener("click",event=>{event.stopPropagation();showNoteRelations(node,item.sourceNote);});
+        const deleteButton=$(".note-delete",node);
+        deleteButton.addEventListener("click",event=>{event.stopPropagation();deleteNoteWithConfirmation(item.id);});
       }
       const titleEdit = $(".node-title-edit", node);
       const bodyEdit = $(".node-body-edit", node);
       if(!graphMode)installFormatting(node, bodyEdit, item.sourceNote);
       if(!graphMode&&item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=(block?.subject || '원문')+' '+anchor.page+'쪽';button.onclick=()=>{state.activeBlockId=anchor.blockId;switchCanvas(/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester));};evidence.append(button);});node.append(evidence);}
-      if(!graphMode)[titleEdit,bodyEdit].forEach((editor)=>editor.addEventListener("dblclick",(event)=>{event.stopPropagation();editor.contentEditable="true";editor.focus();}));
+      if(!graphMode)[titleEdit,bodyEdit].forEach((editor)=>editor.addEventListener("dblclick",(event)=>{event.stopPropagation();editor.contentEditable="true";editor.focus();const range=document.caretRangeFromPoint?.(event.clientX,event.clientY);if(range&&editor.contains(range.startContainer)){const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);}}));
       titleEdit.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); titleEdit.blur(); } });
       bodyEdit.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") bodyEdit.blur(); });
       titleEdit.addEventListener("blur", () => {
@@ -1283,6 +1323,21 @@ function createInlineCanvasNote() {
   });
 }
 
+function deleteNoteWithConfirmation(id) {
+  const note = state.notes.find((item) => item.id === id);
+  if (!note || !window.confirm('"' + note.title + '" 메모를 삭제할까요?')) return;
+  state.notes = state.notes.filter((item) => item.id !== id);
+  state.notes.forEach((item) => { item.links = (item.links || []).filter((link) => link !== id); });
+  state.highlights = state.highlights.filter((highlight) => highlight.noteId !== id);
+  state.questions.forEach((question) => { question.noteIds = (question.noteIds || []).filter((noteId) => noteId !== id); });
+  delete state.canvasPositions?.[id];
+  saveState();
+  if ($("#note-dialog").open) $("#note-dialog").close();
+  renderAll();
+  renderCanvas();
+  toast("메모를 삭제했어요.");
+}
+
 function bindEvents() {
   $$(".nav-item").forEach((item) => item.addEventListener("click", () => routeTo(item.dataset.route)));
   $(".brand").addEventListener("click", (event) => { event.preventDefault(); routeTo("canvas"); });
@@ -1324,14 +1379,7 @@ function bindEvents() {
   });
   $("#delete-note").addEventListener("click", () => {
     const id = $("#note-id").value;
-    if (!id) return;
-    state.notes = state.notes.filter((note) => note.id !== id);
-    state.notes.forEach((note) => { note.links = note.links.filter((link) => link !== id); });
-    state.highlights.forEach((highlight) => { if (highlight.noteId === id) highlight.noteId = null; });
-    saveState();
-    $("#note-dialog").close();
-    renderAll();
-    toast("메모를 삭제했어요.");
+    if (id) deleteNoteWithConfirmation(id);
   });
   $("#review-button").addEventListener("click", openReview);
   $("#save-review").addEventListener("click", () => {
@@ -1498,13 +1546,13 @@ function installRecordTabs(){
  const toolbar=$('.canvas-source-toolbar'),tabs=document.createElement('div');tabs.className='record-tabs';
  RECORD_TABS.forEach((label)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=()=>switchCanvas(label);tabs.append(button);});
  toolbar.before(tabs);toolbar.hidden=true;
- const table=document.createElement('div');table.id='record-table';$('.canvas-source-scroll').prepend(table);table.addEventListener('contextmenu',showSelectionMenu);
+ const table=document.createElement('div');table.id='record-table';$('.canvas-source-scroll').prepend(table);table.addEventListener('contextmenu',showSelectionMenu);table.addEventListener('click',(event)=>{const mark=event.target.closest('mark[data-note-id]');if(mark)jumpToNote(mark.dataset.noteId);});$('.canvas-source-scroll').addEventListener('scroll',()=>renderCrossLinks(),{passive:true});
 }
 function renderRecordTable(){
  const target=$('#record-table');if(!target)return;
  $$('.record-tabs button').forEach((button)=>button.setAttribute('aria-pressed',String(button.textContent===recordTab)));
  ['#canvas-source-document','#canvas-source-title','.canvas-source-meta','.canvas-source-toolbar'].forEach((selector)=>$(selector).hidden=true);
- $('#cross-link-layer').style.display='none';
+  $('#cross-link-layer').style.display='';
  const prepared=(block)=>!state.preparedRecordVersion||block.id.startsWith('prepared-');
  const bundled=(block)=>/출결|수상|자격|학폭|학교폭력|봉사/.test(block.section);
  let blocks=[];
@@ -1513,11 +1561,11 @@ function renderRecordTable(){
  else {const [grade,semester]=recordTab.split(' ');blocks=state.blocks.filter((block)=>prepared(block)&&/세부능력|교과학습/.test(block.section)&&block.grade===grade&&normalizeSemester(block.semester)===semester);}
  if(!blocks.length){target.innerHTML='<p class="record-empty">등록된 내용이 없습니다.</p>';return;}
  if(recordTab==='기록 묶음'){
-   target.innerHTML='<section class="record-card-section"><h3>기록 묶음</h3><table class="record-bundle-table"><thead><tr><th>영역</th><th>학년</th><th>내용</th></tr></thead><tbody>'+blocks.map((block)=>'<tr><td>'+escapeHtml(block.section)+'</td><td>'+escapeHtml(block.grade)+'</td><td>'+escapeHtml(block.text).replace(/\n/g,'<br>')+'</td></tr>').join('')+'</tbody></table></section>';return;
+   target.innerHTML='<section class="record-card-section"><h3>기록 묶음</h3><table class="record-bundle-table"><thead><tr><th>영역</th><th>학년</th><th>내용</th></tr></thead><tbody>'+blocks.map((block)=>'<tr><td>'+escapeHtml(block.section)+'</td><td>'+escapeHtml(block.grade)+'</td><td class="record-source-text" data-source-block="'+escapeHtml(block.id)+'">'+renderLinkedBlockText(block)+'</td></tr>').join('')+'</tbody></table></section>';return;
  }
  const key=(block)=>recordTab==='창체'?block.grade+' · '+block.subject:block.subject;
  const grouped=new Map();blocks.forEach((block)=>{const name=key(block);if(!grouped.has(name))grouped.set(name,[]);grouped.get(name).push(block);});
- target.innerHTML='<section class="record-card-section"><h3>'+escapeHtml(recordTab)+'</h3><div class="record-subject-grid">'+[...grouped].map(([name,items])=>'<article class="record-subject-card"><h4>'+escapeHtml(name)+'</h4>'+items.map((block)=>'<div class="record-card-entry"><p class="record-source-text" data-source-block="'+escapeHtml(block.id)+'">'+escapeHtml(block.text).replace(/\n/g,'<br>')+'</p></div>').join('')+'</article>').join('')+'</div></section>';
+ target.innerHTML='<section class="record-card-section"><h3>'+escapeHtml(recordTab)+'</h3><div class="record-subject-grid">'+[...grouped].map(([name,items])=>'<article class="record-subject-card"><h4>'+escapeHtml(name)+'</h4>'+items.map((block)=>'<div class="record-card-entry"><p class="record-source-text" data-source-block="'+escapeHtml(block.id)+'">'+renderLinkedBlockText(block)+'</p></div>').join('')+'</article>').join('')+'</div></section>';
 }
 async function loadPreparedRecord(){
  try{
