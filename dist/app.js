@@ -753,7 +753,7 @@ function renderCanvas() {
       const titleEdit = $(".node-title-edit", node);
       const bodyEdit = $(".node-body-edit", node);
       if(!graphMode)installFormatting(node, bodyEdit, item.sourceNote);
-      if(!graphMode&&item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=(block?.subject || '원문')+' '+anchor.page+'쪽';button.onclick=()=>{state.activeBlockId=anchor.blockId;switchCanvas(/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester));};evidence.append(button);});node.append(evidence);}
+      if(!graphMode&&item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=block?.subject || '원문';button.onclick=()=>{state.activeBlockId=anchor.blockId;switchCanvas(/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester));};evidence.append(button);});node.append(evidence);}
       if(!graphMode)[titleEdit,bodyEdit].forEach((editor)=>editor.addEventListener("dblclick",(event)=>{event.stopPropagation();editor.contentEditable="true";editor.focus();const range=document.caretRangeFromPoint?.(event.clientX,event.clientY);if(range&&editor.contains(range.startContainer)){const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);}}));
       titleEdit.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); titleEdit.blur(); } });
       bodyEdit.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") bodyEdit.blur(); });
@@ -1540,8 +1540,9 @@ function installCanvasPan(){
 }
 
 let recordTab = '1학년 1학기';
-const RECORD_TABS=['1학년 1학기','1학년 2학기','2학년 1학기','2학년 2학기','3학년 1학기','창체','기록 묶음'];
-function normalizeSemester(value=''){const match=String(value).match(/[12]학기|[12]·[12]학기/);return match?match[0]:'학기 미정';}
+const RECORD_TABS=['1학년 1학기','1학년 2학기','1학년 전체','2학년 1학기','2학년 2학기','2학년 전체','3학년 1학기','창체','기록 묶음'];
+function normalizeSemester(value=''){const text=String(value);if(/전체|통합|연간/.test(text))return '전체';const match=text.match(/[12]학기/);return match?match[0]:'전체';}
+function semesterVisible(blockSemester,selectedSemester){const semester=normalizeSemester(blockSemester);return selectedSemester==='전체'||semester==='전체'||semester===selectedSemester;}
 function installRecordTabs(){
  const toolbar=$('.canvas-source-toolbar'),tabs=document.createElement('div');tabs.className='record-tabs';
  RECORD_TABS.forEach((label)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=()=>switchCanvas(label);tabs.append(button);});
@@ -1558,7 +1559,7 @@ function renderRecordTable(){
  let blocks=[];
  if(recordTab==='기록 묶음')blocks=state.blocks.filter((block)=>prepared(block)&&bundled(block));
  else if(recordTab==='창체')blocks=state.blocks.filter((block)=>prepared(block)&&/창의|창체/.test(block.section));
- else {const [grade,semester]=recordTab.split(' ');blocks=state.blocks.filter((block)=>prepared(block)&&/세부능력|교과학습/.test(block.section)&&block.grade===grade&&normalizeSemester(block.semester)===semester);}
+ else {const [grade,semester]=recordTab.split(' ');blocks=state.blocks.filter((block)=>prepared(block)&&/세부능력|교과학습/.test(block.section)&&block.grade===grade&&semesterVisible(block.semester,semester));}
  if(!blocks.length){target.innerHTML='<p class="record-empty">등록된 내용이 없습니다.</p>';return;}
  if(recordTab==='기록 묶음'){
    target.innerHTML='<section class="record-card-section"><h3>기록 묶음</h3><table class="record-bundle-table"><thead><tr><th>영역</th><th>학년</th><th>내용</th></tr></thead><tbody>'+blocks.map((block)=>'<tr><td>'+escapeHtml(block.section)+'</td><td>'+escapeHtml(block.grade)+'</td><td class="record-source-text" data-source-block="'+escapeHtml(block.id)+'">'+renderLinkedBlockText(block)+'</td></tr>').join('')+'</tbody></table></section>';return;
@@ -1567,12 +1568,30 @@ function renderRecordTable(){
  const grouped=new Map();blocks.forEach((block)=>{const name=key(block);if(!grouped.has(name))grouped.set(name,[]);grouped.get(name).push(block);});
  target.innerHTML='<section class="record-card-section"><h3>'+escapeHtml(recordTab)+'</h3><div class="record-subject-grid">'+[...grouped].map(([name,items])=>'<article class="record-subject-card"><h4>'+escapeHtml(name)+'</h4>'+items.map((block)=>'<div class="record-card-entry"><p class="record-source-text" data-source-block="'+escapeHtml(block.id)+'">'+renderLinkedBlockText(block)+'</p></div>').join('')+'</article>').join('')+'</div></section>';
 }
+function replacePreparedRecord(data){
+ const previous=state.blocks.filter((block)=>block.id.startsWith('prepared-'));
+ const retained=state.blocks.filter((block)=>!block.id.startsWith('prepared-'));
+ const matchBlock=(oldBlock)=>{
+  const candidates=data.blocks.filter((block)=>block.grade===oldBlock.grade&&block.section===oldBlock.section&&block.subject===oldBlock.subject);
+  return candidates.find((block)=>normalizeSemester(block.semester)===normalizeSemester(oldBlock.semester))||candidates.find((block)=>normalizeSemester(block.semester)==='전체')||candidates[0];
+ };
+ const replacements=new Map(previous.map((block)=>[block.id,matchBlock(block)]).filter(([,block])=>block));
+ const updateAnchor=(anchor)=>{const block=replacements.get(anchor.blockId);if(!block)return anchor;return {...anchor,blockId:block.id,page:block.page,pages:block.sourcePages||[],grade:block.grade,subject:block.subject,semester:block.semester};};
+ state.notes.forEach((note)=>{note.anchors=(note.anchors||[]).map(updateAnchor);});
+ state.highlights=(state.highlights||[]).map(updateAnchor).filter((highlight)=>state.notes.some((note)=>note.id===highlight.noteId));
+ const active=replacements.get(state.activeBlockId);
+ state.blocks=[...retained,...data.blocks];
+ state.recordName=data.recordName;
+ state.activeBlockId=active?.id||data.blocks[0]?.id||'';
+ state.preparedRecordVersion=data.version;
+ saveState();
+}
 async function loadPreparedRecord(){
  try{
   const response=await fetch('./record-data.json');if(!response.ok)return;const data=await response.json();
-  const load=()=>{const ids=new Set(state.blocks.map(b=>b.id));state.blocks.push(...data.blocks.filter(b=>!ids.has(b.id)));state.recordName=data.recordName;state.activeBlockId=data.blocks[0].id;state.preparedRecordVersion=data.version;saveState();recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';renderAll();renderCanvas();if($("#graph-view").classList.contains("is-active"))renderAllGraph();};
-  if(!hadSavedData){state.blocks=[];state.notes=[];state.questions=[];state.highlights=[];load();}
-  else if(state.preparedRecordVersion!==data.version){const button=document.createElement('button');button.className='secondary-button';button.textContent='정리된 생기부 불러오기';button.onclick=()=>{load();button.remove();};$('.canvas-primary-actions').append(button);}
+  if(!hadSavedData){state.blocks=[];state.notes=[];state.questions=[];state.highlights=[];state.blocks.push(...data.blocks);state.recordName=data.recordName;state.activeBlockId=data.blocks[0]?.id||'';state.preparedRecordVersion=data.version;saveState();}
+  else if(state.preparedRecordVersion!==data.version)replacePreparedRecord(data);
+  recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';renderAll();renderCanvas();if($("#graph-view").classList.contains("is-active"))renderAllGraph();
  }catch(error){console.error('정리된 생기부 읽기 실패',error);}
 }
 
