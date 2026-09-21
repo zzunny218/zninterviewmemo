@@ -554,3 +554,37 @@ body:not([data-route="canvas"]) .rail-submenu{display:none}
 #all-graph-edges line.similarity-link{stroke-width:var(--graph-similarity-link-width)!important}
 .cross-link-layer path,.edge-layer path{stroke:rgba(255,255,255,var(--canvas-link-opacity))!important;stroke-width:var(--canvas-link-width)!important}
 @media(max-width:760px){.app-shell{grid-template-columns:60px minmax(0,1fr)}.workspace-rail{padding:8px 5px}.rail-route{height:52px;font-size:10px}.rail-toggle{grid-template-columns:1fr;justify-items:center;padding:6px 2px}.rail-toggle span{justify-self:center}.rail-toggle small{display:none}}
+
+/* 생기부 과목은 한 행에 하나만 표시하고 태블릿에서도 읽기·탐색 영역을 보존한다. */
+.record-subject-grid{grid-template-columns:minmax(0,1fr)!important}
+.record-subject-card{width:100%;padding:14px 16px}
+.record-subject-card h4{font-size:15px}
+.record-card-entry p{font-size:14px;line-height:1.78}
+.canvas-source-scroll{overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y}
+.record-tabs button{min-height:40px;touch-action:manipulation}
+
+@media (min-width:761px) and (max-width:900px){
+  .canvas-split,
+  .canvas-split.search-hidden{
+    grid-template-areas:"source canvas";
+    grid-template-columns:minmax(260px,42%) minmax(0,1fr)!important;
+  }
+  .canvas-split.source-hidden,
+  .canvas-split.source-hidden.search-hidden{
+    grid-template-areas:"canvas";
+    grid-template-columns:minmax(0,1fr)!important;
+  }
+  .canvas-filter-pane{right:0;width:min(230px,42vw)}
+  .canvas-stage{min-width:0}
+  .canvas-source-scroll{padding:16px 14px 44px}
+  .record-tabs{grid-template-columns:repeat(2,minmax(0,1fr))!important;padding:8px}
+  .record-tabs button{padding:8px 6px;white-space:normal;line-height:1.25}
+  .record-card-section{padding:8px}
+  .record-subject-card{padding:13px}
+}
+
+@media (max-width:760px){
+  .record-tabs{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .record-subject-card{padding:12px}
+  .record-card-entry p{font-size:13px;line-height:1.72}
+}
