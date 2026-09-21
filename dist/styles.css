@@ -512,3 +512,6 @@ mark.source-highlight.linked,.canvas-source-document mark.source-highlight.linke
 .canvas-stage{z-index:auto!important;isolation:auto!important}.edge-layer{z-index:1!important}.cross-link-layer{z-index:2!important}.node-layer{z-index:5!important}
 
 .node-category-icon image,.style-icon-glyph image{image-rendering:auto;pointer-events:none}.node-category-icon:has(image) svg,.style-icon-glyph:has(image) svg{width:21px;height:21px}.style-icon-glyph:has(image) svg{width:17px;height:17px}
+
+/* Keep both text and highlighter palettes in the same vertical layout. */
+.floating-color-menu{display:block!important}.floating-color-menu .spectrum-color-row{width:100%;box-sizing:border-box}
