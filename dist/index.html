@@ -101,6 +101,8 @@
         <section id="canvas-view" class="route-view canvas-view is-active" aria-label="생기부와 메모 통합 캔버스">
           <div class="canvas-toolbar">
             <div class="canvas-primary-actions">
+              <button id="toggle-source-pane" class="secondary-button pane-toggle" type="button" aria-pressed="true">생기부</button>
+              <button id="toggle-search-pane" class="secondary-button pane-toggle" type="button" aria-pressed="true">검색</button>
               <button id="canvas-upload" class="secondary-button" type="button">PDF</button>
               <button id="ai-link-notes" class="secondary-button" type="button" disabled>AI 연결 · 준비 중</button>
               <button id="ai-analyze-record" class="secondary-button" type="button" disabled>AI 분석 · 준비 중</button>
@@ -188,8 +190,7 @@
         <label class="field"><span>내용</span><textarea id="note-body" rows="7" placeholder="내 언어로 풀어 써보세요."></textarea></label>
         <div id="note-anchor-preview" class="anchor-preview" hidden></div>
         <div class="field-row">
-          <label class="field"><span>카테고리</span><select id="note-category"><option>탐구</option><option>성장</option><option>협업</option><option>진로</option><option>자유 메모</option><option>활동</option><option>캐릭터</option><option>면접 질문</option></select></label>
-          <label class="field"><span>태그</span><input id="note-tags" placeholder="쉼표로 구분" /></label>
+          <label class="field"><span>태그</span><select id="note-category"><option>전공 지식</option><option>논리·사고력</option><option>인성</option><option>협동</option><option>리더십</option><option>진로 탐색</option><option>가치관</option><option>태도</option><option>캐릭터</option><option>성장</option><option>질문</option><option selected>자유 메모</option></select></label>
           <label class="field color-field"><span>연결 색상</span><input id="note-color" type="color" value="#5865f2" aria-label="메모와 원문 연결 색상" /></label>
         </div>
         <div class="dialog-actions"><button id="delete-note" class="danger-text" type="button" hidden>메모 삭제</button><span></span><button class="secondary-button" value="cancel">취소</button><button id="save-note" class="primary-button" value="default">저장</button></div>

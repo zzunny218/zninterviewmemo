@@ -138,6 +138,30 @@ let canvasContextPoint = null;
 let allGraphAnimationFrame = 0;
 const CANVAS_MIN_ZOOM = .15;
 const CANVAS_MAX_ZOOM = 2;
+const CATEGORY_TYPES = ["전공 지식","논리·사고력","인성","협동","리더십","진로 탐색","가치관","태도","캐릭터","성장","질문","자유 메모"];
+const CATEGORY_MIGRATION = {"탐구":"논리·사고력","협업":"협동","진로":"진로 탐색","활동":"태도","면접 질문":"질문"};
+
+function normalizeNoteCategory(value) {
+  const migrated = CATEGORY_MIGRATION[value] || value;
+  return CATEGORY_TYPES.includes(migrated) ? migrated : "자유 메모";
+}
+
+function migrateWorkspaceState() {
+  state.notes ||= [];
+  state.notes.forEach((note) => {
+    note.category = normalizeNoteCategory(note.category);
+    note.tags ||= [];
+    note.anchors ||= [];
+    note.links ||= [];
+    note.footnotes ||= [];
+  });
+  state.canvasViews ||= {};
+  if (!state.canvasViews.all) {
+    const legacy = state.canvasViews[state.activeCanvasTab] || Object.values(state.canvasViews)[0];
+    state.canvasViews.all = legacy || {pan:{x:0,y:0},zoom:1};
+  }
+  state.canvasPanels = {source: state.canvasPanels?.source !== false, search: state.canvasPanels?.search !== false};
+}
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -362,8 +386,7 @@ function openNoteDialog(note = null, anchor = null) {
   $("#note-dialog-title").textContent = note ? "메모 다듬기" : "새 메모";
   $("#note-title").value = note?.title || "";
   $("#note-body").value = note?.body || "";
-  $("#note-category").value = note?.category || "탐구";
-  $("#note-tags").value = note?.tags?.join(", ") || "";
+  $("#note-category").value = normalizeNoteCategory(note?.category || "자유 메모");
   $("#note-color").value = note?.color || "#5865f2";
   $("#delete-note").hidden = !note;
   const preview = $("#note-anchor-preview");
@@ -398,8 +421,8 @@ function saveNoteFromForm() {
   const payload = {
     title: $("#note-title").value.trim(),
     body: $("#note-body").value.trim(),
-    category: $("#note-category").value,
-    tags: $("#note-tags").value.split(",").map((tag) => tag.trim().replace(/^#/, "")).filter(Boolean),
+    category: normalizeNoteCategory($("#note-category").value),
+    tags: id ? (state.notes.find((item) => item.id === id)?.tags || []) : [],
     color: $("#note-color").value || "#5865f2"
   };
   if (!payload.title) return false;
@@ -409,7 +432,7 @@ function saveNoteFromForm() {
     if (anchor && !note.anchors.some((item) => item.blockId === anchor.blockId && item.quote === anchor.quote)) note.anchors.push(anchor);
     if (anchor) applyHighlight(anchor, id, payload.color);
   } else {
-    const note = { id: uid("note"), ...payload, canvasTab:recordTab, anchors: anchor ? [anchor] : [], links: [], x: 180 + state.notes.length * 42, y: 110 + state.notes.length * 34 };
+    const note = { id: uid("note"), ...payload, anchors: anchor ? [anchor] : [], links: [], footnotes: [], x: 180 + state.notes.length * 42, y: 110 + state.notes.length * 34 };
     state.notes.push(note);
     if (anchor) applyHighlight(anchor, note.id, payload.color);
   }
@@ -599,8 +622,8 @@ function clampPointToRect(point,rect,inset=4){
 }
 function renderCrossLinks() {
   const svg = $("#cross-link-layer"), split = $("#canvas-split"), sourceViewport = $(".canvas-source-scroll"), stage = $("#canvas-stage");
-  if (!svg || !split || !sourceViewport || !stage || innerWidth <= 760) return;
-  svg.innerHTML = "";
+  if(svg)svg.innerHTML = "";
+  if (!svg || !split || !sourceViewport || !stage || innerWidth <= 760 || state.canvasPanels?.source === false) return;
   const splitRect = split.getBoundingClientRect(), sourceRect = sourceViewport.getBoundingClientRect(), stageRect = stage.getBoundingClientRect();
   document.querySelectorAll("#record-table mark[data-note-id], #canvas-source-document mark[data-note-id]").forEach((mark) => {
     const node = $(`.canvas-node[data-note-id="${CSS.escape(mark.dataset.noteId)}"]`);
@@ -617,7 +640,21 @@ function renderCrossLinks() {
 }
 
 function categoryIcon(category) {
-  return ({ "탐구": "⌕", "성장": "↗", "협업": "◫", "진로": "◆", "자유 메모": "✦", "활동": "⚡", "캐릭터": "◎", "면접 질문": "?" })[category] || "•";
+  const icons = {
+    "전공 지식": '<path d="M5 5.5c2.2-.8 4.2-.4 7 1.2v11c-2.8-1.6-4.8-2-7-1.2zM19 5.5c-2.2-.8-4.2-.4-7 1.2v11c2.8-1.6 4.8-2 7-1.2z"/>',
+    "논리·사고력": '<path d="M9 18h6M9.7 14.8h4.6M8.2 12.4a6 6 0 1 1 7.6 0c-1.2.8-1.5 1.4-1.5 2.4H9.7c0-1-.3-1.6-1.5-2.4z"/>',
+    "인성": '<path d="M12 19s-7-4.4-7-9.1C5 5.8 10 4.8 12 8c2-3.2 7-2.2 7 1.9C19 14.6 12 19 12 19z"/>',
+    "협동": '<path d="M4 12l4-4 3 2 2-2 7 6-3 3-3-1-2 2-3-2-2 1-3-3zM7 9l-2-2M17 9l2-2"/>',
+    "리더십": '<path d="M6 20V4M7 5h11l-3 4 3 4H7z"/>',
+    "진로 탐색": '<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4.5 4.5"/>',
+    "가치관": '<path d="m12 4 2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5L4.8 9.3l5-.7z"/>',
+    "태도": '<path d="M8 19c-2-2-2.5-4.5-.5-6.5 1.6-1.6 3.4-1.2 4.5.2 1.1-1.4 2.9-1.8 4.5-.2 2 2 1.5 4.5-.5 6.5M12 12C9.5 9 9.8 6.2 12 4c2.2 2.2 2.5 5 0 8zM7 12C4.2 11.4 3.5 9 4 7c2.3.2 4.3 1.5 4 4"/>',
+    "캐릭터": '<circle cx="12" cy="7" r="3"/><path d="M6 20c.5-5 2.4-7.5 6-7.5s5.5 2.5 6 7.5M9 14l-1 6M15 14l1 6"/>',
+    "성장": '<path d="M5 18l5-5 3 3 6-8M14 8h5v5"/>',
+    "질문": '<path d="M9.5 9a2.7 2.7 0 1 1 4.2 2.2c-1.2.8-1.7 1.4-1.7 2.8M12 18h.01"/>',
+    "자유 메모": '<path d="M12 5v9M12 18h.01"/>'
+  };
+  return '<svg viewBox="0 0 24 24" aria-hidden="true">'+(icons[normalizeNoteCategory(category)] || icons["자유 메모"] )+'</svg>';
 }
 function installStyleMenu(node,note){
   const trigger=$(".node-style-trigger",node),popover=$(".node-style-popover",node);
@@ -647,13 +684,11 @@ function noteCanvas(note){
  const tab=block.grade+' '+normalizeSemester(block.semester);
  return RECORD_TABS.includes(tab)?tab:'1학년 1학기';
 }
-function saveCanvasView(){state.canvasViews||={};state.canvasViews[recordTab]={pan:{...canvasPan},zoom:canvasZoom};saveState();}
+function saveCanvasView(){state.canvasViews||={};state.canvasViews.all={pan:{...canvasPan},zoom:canvasZoom};saveState();}
 function switchCanvas(tab){
- if(tab===recordTab)return;
- saveCanvasView();recordTab=tab;state.activeCanvasTab=tab;graphMode=false;selectedGraphNoteId=null;
- $("#canvas-graph")?.setAttribute("aria-pressed","false");
- const view=state.canvasViews?.[tab];canvasPan=view?.pan?{...view.pan}:{x:0,y:0};canvasZoom=view?.zoom||1;
- saveState();renderCanvas();
+ if(!RECORD_TABS.includes(tab))return;
+ recordTab=tab;state.activeCanvasTab=tab;
+ saveState();renderRecordTable();requestAnimationFrame(renderCrossLinks);
 }
 function graphCoordinates(items){
  const positions=new Map(),count=items.length;
@@ -669,17 +704,13 @@ function graphCoordinates(items){
 }
 function jumpToNote(id){
  const note=state.notes.find(item=>item.id===id);if(!note)return;
- if(noteCanvas(note)!==recordTab)switchCanvas(noteCanvas(note));
  graphMode=false;renderCanvas();requestAnimationFrame(()=>{const node=$('.canvas-node[data-note-id="'+CSS.escape(id)+'"]');if(node)focusCanvasNote(node);});
 }
 
-function noteVisibleOnCanvas(note){
- const home=noteCanvas(note),whole=recordTab.match(/^([12]학년) 전체$/);
- return whole ? home.startsWith(whole[1]+' ') : home===recordTab;
-}
+function noteVisibleOnCanvas(){ return true; }
 function canvasItems() {
   state.canvasPositions ||= {};
-  const noteItems = state.notes.filter(noteVisibleOnCanvas).map((note) => ({ ...note, kind: "note", context: noteContext(note), sourceNote: note }));
+  const noteItems = state.notes.map((note) => ({ ...note, category:normalizeNoteCategory(note.category), kind: "note", context: noteContext(note), sourceNote: note }));
   const personas = derivePersonas().slice(0, 0).map((persona, index) => {
     const notes = persona.noteIds.map((id) => state.notes.find((note) => note.id === id)).filter(Boolean);
     const anchors = notes.flatMap((note) => note.anchors);
@@ -692,14 +723,14 @@ function canvasItems() {
     const anchors = notes.flatMap((note) => note.anchors);
     const context = noteContext({ anchors });
     const position = state.canvasPositions[`canvas-question-${question.id}`] || { x: 55 + index * 300, y: 675 };
-    return { id: `canvas-question-${question.id}`, title: question.question, body: "면접 답변과 원문 근거를 함께 확인", category: "면접 질문", tags: [question.type], noteIds: question.noteIds, anchors, links: [], color: "#b28ee8", kind: "question", questionId: question.id, context, ...position, virtual: true };
+    return { id: `canvas-question-${question.id}`, title: question.question, body: "면접 답변과 원문 근거를 함께 확인", category: "질문", tags: [question.type], noteIds: question.noteIds, anchors, links: [], color: "#b28ee8", kind: "question", questionId: question.id, context, ...position, virtual: true };
   });
   const lead = state.notes.find((note) => note.anchors.length);
   const activities = lead ? [{
     id: "canvas-activity-lead",
     title: lead.title,
     body: "계기 → 행동 → 판단 → 결과 → 한계 → 후속 활동",
-    category: "활동",
+    category: "태도",
     tags: ["활동 카드"],
     noteIds: [lead.id],
     anchors: lead.anchors,
@@ -716,6 +747,7 @@ function canvasItems() {
 function renderCanvas() {
   if(activeFormattingPicker)activeFormattingPicker.close(false);
   $$('.floating-color-menu').forEach((menu)=>menu.remove());
+  applyCanvasPanels();
   renderCanvasSource();
   renderRecordTable();
   const layer = $("#node-layer");
@@ -732,7 +764,7 @@ function renderCanvas() {
     node.className = `canvas-node${kindClass}${graphMode?" graph-node":""}`;
     node.dataset.noteId = item.id;
     node.dataset.category = item.category;
-    node.dataset.search = `${item.title} ${item.body || ""} ${(item.tags || []).join(" ")}`.toLowerCase();
+    node.dataset.search = `${item.title} ${item.body || ""} ${(item.tags || []).join(" ")} ${(item.footnotes || []).map((footnote)=>footnote.text).join(" ")}`.toLowerCase();
     node.dataset.grades = item.context.grades.join(",");
     node.dataset.subjects = item.context.subjects.join(",");
     node.style.setProperty("--note-color", item.color || "#5865f2");
@@ -752,8 +784,8 @@ function renderCanvas() {
     node.addEventListener("dblclick",(event)=>{if(event.target.closest("button,[contenteditable]"))return;focusCanvasNote(node);});
     if (item.kind === "note") {
       const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
-      const categories=["탐구","성장","협업","진로","자유 메모","활동","캐릭터","면접 질문"]; const colors=["#5865f2","#57a5e5","#48a986","#e5a94e","#db6b83","#b18ae8"];
-      popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\"><span class=\"style-icon-glyph\">"+categoryIcon(category)+"</span><span>"+category+"</span></button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div><input class=\"style-spectrum\" type=\"color\" value=\""+(item.color||"#5865f2")+"\" aria-label=\"메모 색상 직접 선택\"><button type=\"button\" class=\"style-relations\">메모 연결 · 캔버스 이동</button>"; node.append(popover);
+      const categories=CATEGORY_TYPES; const colors=["#5865f2","#57a5e5","#48a986","#e5a94e","#db6b83","#b18ae8"];
+      popover.innerHTML="<div class=\"style-icon-list\">"+categories.map((category)=>"<button type=\"button\" data-category=\""+category+"\" aria-label=\""+category+"\"><span class=\"style-icon-glyph\">"+categoryIcon(category)+"</span><span>"+category+"</span></button>").join("")+"</div><div class=\"style-color-list\">"+colors.map((color)=>"<button type=\"button\" data-color=\""+color+"\" style=\"--picker-color:"+color+"\" aria-label=\"색상 선택\"></button>").join("")+"</div><input class=\"style-spectrum\" type=\"color\" value=\""+(item.color||"#5865f2")+"\" aria-label=\"메모 색상 직접 선택\"><button type=\"button\" class=\"style-relations\">메모 연결</button>"; node.append(popover);
       installStyleMenu(node, item.sourceNote);
       if(!graphMode){
         const deleteButton=$(".note-delete",node);
@@ -761,8 +793,8 @@ function renderCanvas() {
       }
       const titleEdit = $(".node-title-edit", node);
       const bodyEdit = $(".node-body-edit", node);
-      if(!graphMode)installFormatting(node, bodyEdit, item.sourceNote);
-      if(!graphMode&&item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=block?.subject || '원문';button.onclick=()=>{state.activeBlockId=anchor.blockId;switchCanvas(/창의|창체/.test(block?.section||'')?'창체':block?.grade+' '+normalizeSemester(block?.semester));};evidence.append(button);});node.append(evidence);}
+      if(!graphMode){installFormatting(node, bodyEdit, item.sourceNote);installFootnotes(node,item.sourceNote);}
+      if(!graphMode&&item.anchors.length){const evidence=document.createElement('div');evidence.className='node-evidence';item.anchors.forEach(anchor=>{const button=document.createElement('button');button.type='button';const block=state.blocks.find(b=>b.id===anchor.blockId);button.textContent=block?.subject || '원문';button.onclick=()=>{state.activeBlockId=anchor.blockId;state.canvasPanels.source=true;applyCanvasPanels();switchCanvas(/창의|창체/.test(block?.section||'')?'창체':(/출결|수상|자격|학폭|학교폭력|봉사/.test(block?.section||'')?'기록 묶음':block?.grade+' '+normalizeSemester(block?.semester)));};evidence.append(button);});node.append(evidence);}
       if(!graphMode)[titleEdit,bodyEdit].forEach((editor)=>editor.addEventListener("dblclick",(event)=>{event.stopPropagation();editor.contentEditable="true";editor.focus();const range=document.caretRangeFromPoint?.(event.clientX,event.clientY);if(range&&editor.contains(range.startContainer)){const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);}}));
       titleEdit.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); titleEdit.blur(); } });
       bodyEdit.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") bodyEdit.blur(); });
@@ -791,18 +823,46 @@ function renderCanvas() {
   });
 }
 
+function installFootnotes(node,note){
+ const section=document.createElement('section');section.className='note-footnotes';
+ const items=document.createElement('div');items.className='footnote-items';
+ (note.footnotes||[]).forEach((footnote)=>{
+  const row=document.createElement('div');row.className='footnote-item';row.dataset.footnoteId=footnote.id;
+  row.innerHTML='<div class="footnote-text" contenteditable="false" spellcheck="true">'+escapeHtml(footnote.text||'각주 내용')+'</div><button class="footnote-delete" type="button" aria-label="각주 삭제">×</button>';
+  const editor=$('.footnote-text',row);
+  editor.addEventListener('pointerdown',event=>event.stopPropagation());
+  editor.addEventListener('dblclick',event=>{event.stopPropagation();editor.contentEditable='true';editor.focus();document.execCommand?.('selectAll',false,null);});
+  editor.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();editor.blur();}});
+  editor.addEventListener('blur',()=>{footnote.text=editor.textContent.trim();editor.contentEditable='false';saveState();renderCanvasFilters();});
+  $('.footnote-delete',row).onclick=(event)=>{event.stopPropagation();note.footnotes=note.footnotes.filter(item=>item.id!==footnote.id);saveState();renderCanvas();};
+  items.append(row);
+ });
+ const add=document.createElement('button');add.type='button';add.className='footnote-add';add.textContent='＋ 각주 메모';
+ add.onclick=(event)=>{event.stopPropagation();const footnote={id:uid('footnote'),text:''};note.footnotes||=[];note.footnotes.push(footnote);saveState();renderCanvas();requestAnimationFrame(()=>{const editor=$('.footnote-item[data-footnote-id="'+CSS.escape(footnote.id)+'"] .footnote-text');if(editor){editor.contentEditable='true';editor.textContent='';editor.focus();}});};
+ section.append(items,add);node.append(section);
+}
+
+function applyCanvasPanels(){
+ const split=$("#canvas-split");if(!split)return;
+ state.canvasPanels ||= {source:true,search:true};
+ split.classList.toggle('source-hidden',!state.canvasPanels.source);
+ split.classList.toggle('search-hidden',!state.canvasPanels.search);
+ $("#toggle-source-pane")?.setAttribute('aria-pressed',String(state.canvasPanels.source));
+ $("#toggle-search-pane")?.setAttribute('aria-pressed',String(state.canvasPanels.search));
+ requestAnimationFrame(()=>{renderEdges();renderCrossLinks();});
+}
+
 function showNoteRelations(node,note){
  const existing=node.querySelector('.note-relations');if(existing){existing.remove();return;}
  const panel=document.createElement('div');panel.className='note-relations';
  const incoming=state.notes.filter(other=>(other.links||[]).includes(note.id));
  const outgoing=(note.links||[]).map(id=>state.notes.find(other=>other.id===id)).filter(Boolean);
- panel.innerHTML='<div class="relation-head"><strong>메모 연결</strong><button type="button" class="relation-close" aria-label="닫기">×</button></div><div class="relation-list"></div><button type="button" class="relation-add">＋ 메모 연결</button><label class="relation-move">캔버스 이동<select aria-label="메모 캔버스 이동">'+RECORD_TABS.map(tab=>'<option value="'+escapeHtml(tab)+'"'+(noteCanvas(note)===tab?' selected':'')+'>'+escapeHtml(tab)+'</option>').join('')+'</select></label>';
+ panel.innerHTML='<div class="relation-head"><strong>메모 연결</strong><button type="button" class="relation-close" aria-label="닫기">×</button></div><div class="relation-list"></div><button type="button" class="relation-add">＋ 메모 연결</button>';
  const list=panel.querySelector('.relation-list');
  [...outgoing.map(other=>({other,label:'↗'})),...incoming.map(other=>({other,label:'↩'}))].forEach(({other,label})=>{const button=document.createElement('button');button.type='button';button.textContent=label+' '+other.title+' · '+noteCanvas(other);button.onclick=()=>jumpToNote(other.id);list.append(button);});
  if(!list.children.length)list.textContent='연결된 메모 없음';
  panel.querySelector('.relation-close').onclick=()=>panel.remove();
  panel.querySelector('.relation-add').onclick=()=>{list.innerHTML='';state.notes.filter(other=>other.id!==note.id&&!(note.links||[]).includes(other.id)).forEach(other=>{const button=document.createElement('button');button.type='button';button.textContent=other.title+' · '+noteCanvas(other);button.onclick=()=>{note.links||=[];note.links.push(other.id);saveState();renderCanvas();};list.append(button);});};
- panel.querySelector('select').onchange=event=>{note.canvasTab=event.target.value;saveState();renderCanvas();};
  node.append(panel);
 }
 
@@ -813,7 +873,7 @@ function renderCanvasFilters(items = canvasItems()) {
   const values = [...new Set([
     ...state.blocks.map((block) => block.grade),
     ...state.blocks.map((block) => block.subject),
-    "캐릭터", "질문", "진로", "활동", "탐구", "성장", "협업", "자유 메모"
+    ...CATEGORY_TYPES
   ])];
   suggestions.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
   search.value = canvasFilters.query;
@@ -835,7 +895,7 @@ function renderCanvasFilters(items = canvasItems()) {
 }
 
 function canvasItemMatches(item) {
-  const haystack = `${item.title} ${item.body || ""} ${(item.tags || []).join(" ")} ${item.category} ${item.context.grades.join(" ")} ${item.context.subjects.join(" ")}`.toLowerCase();
+  const haystack = `${item.title} ${item.body || ""} ${(item.tags || []).join(" ")} ${(item.footnotes || []).map((footnote)=>footnote.text).join(" ")} ${item.category} ${item.context.grades.join(" ")} ${item.context.subjects.join(" ")}`.toLowerCase();
   return !canvasFilters.query || haystack.includes(canvasFilters.query);
 }
 
@@ -980,6 +1040,7 @@ function graphTerms(note) {
   add(note.title, 5, 'priority');
   (note.tags || []).forEach(tag => add(tag, 5, 'priority'));
   add(note.body, 1.25);
+  (note.footnotes || []).forEach(footnote => add(footnote.text, 1.15));
   if (note.bodyHtml) {
     const holder = document.createElement('div'); holder.innerHTML = safeNoteHtml(note.bodyHtml);
     holder.querySelectorAll('b,strong,u,mark,span[style*="color"]').forEach(element => add(element.textContent, 4, 'priority'));
@@ -1432,6 +1493,8 @@ function bindEvents() {
   $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(CANVAS_MAX_ZOOM, canvasZoom + .1); saveCanvasView(); renderCanvas(); });
   $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(CANVAS_MIN_ZOOM, canvasZoom - .1); saveCanvasView(); renderCanvas(); });
   $("#canvas-reset").addEventListener("click", () => { fitCanvas(); saveCanvasView(); });
+  $("#toggle-source-pane").addEventListener("click",()=>{state.canvasPanels.source=!state.canvasPanels.source;saveState();applyCanvasPanels();});
+  $("#toggle-search-pane").addEventListener("click",()=>{state.canvasPanels.search=!state.canvasPanels.search;saveState();applyCanvasPanels();});
   $("#canvas-stage").addEventListener("wheel", (event) => {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
@@ -1630,7 +1693,7 @@ async function loadPreparedRecord(){
  }catch(error){console.error('정리된 생기부 읽기 실패',error);}
 }
 
-recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';const initialCanvasView=state.canvasViews?.[recordTab];if(initialCanvasView){canvasPan={...initialCanvasView.pan};canvasZoom=initialCanvasView.zoom||1;}
+migrateWorkspaceState();saveState();recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';const initialCanvasView=state.canvasViews?.all;if(initialCanvasView){canvasPan={...initialCanvasView.pan};canvasZoom=initialCanvasView.zoom||1;}
 bindEvents();installCanvasPan();installRecordTabs();renderAll();routeTo(location.hash==="#graph"?"graph":"canvas");loadPreparedRecord();
 
 function fitCanvas(){const nodes=$$('#node-layer .canvas-node');if(!nodes.length){canvasPan={x:0,y:0};canvasZoom=1;renderCanvas();return;}const bounds=nodes.map(n=>({x:parseFloat(n.style.left),y:parseFloat(n.style.top),w:n.offsetWidth,h:n.offsetHeight}));const left=Math.min(...bounds.map(n=>n.x)),top=Math.min(...bounds.map(n=>n.y)),right=Math.max(...bounds.map(n=>n.x+n.w)),bottom=Math.max(...bounds.map(n=>n.y+n.h));const stage=$('#canvas-stage');canvasZoom=Math.min(1.5,Math.max(.12,Math.min((stage.clientWidth-70)/(right-left),(stage.clientHeight-70)/(bottom-top))));canvasPan={x:(stage.clientWidth-(right-left)*canvasZoom)/2-left*canvasZoom,y:(stage.clientHeight-(bottom-top)*canvasZoom)/2-top*canvasZoom};renderCanvas();}
