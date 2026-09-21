@@ -143,6 +143,7 @@ const CANVAS_MIN_ZOOM = .15;
 const CANVAS_MAX_ZOOM = 2;
 const CATEGORY_TYPES = ["전공 지식","논리·사고력","인성","협동","리더십","진로 탐색","가치관","태도","캐릭터","성장","질문","자유 메모"];
 const CATEGORY_MIGRATION = {"탐구":"논리·사고력","협업":"협동","진로":"진로 탐색","활동":"태도","면접 질문":"질문"};
+const VISUAL_DEFAULTS = {graphNodeSize:84,graphLinkWidth:2,canvasLinkWidth:2,canvasLinkOpacity:.38,textColor:"#e34b55",highlightColor:"#f6dc62"};
 
 function normalizeNoteCategory(value) {
   const migrated = CATEGORY_MIGRATION[value] || value;
@@ -170,6 +171,11 @@ function migrateWorkspaceState() {
     state.canvasViews.all = legacy || {pan:{x:0,y:0},zoom:1};
   }
   state.canvasPanels = {source: state.canvasPanels?.source !== false, search: state.canvasPanels?.search !== false};
+  state.visualSettings = {...VISUAL_DEFAULTS,...(state.visualSettings || {})};
+  state.notes.forEach(note => {
+    note.textColor = state.visualSettings.textColor;
+    note.highlightColor = state.visualSettings.highlightColor;
+  });
 }
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -214,6 +220,7 @@ function routeTo(route) {
   $$(".route-view").forEach((view) => view.classList.remove("is-active"));
   $(`#${route}-view`)?.classList.add("is-active");
   history.replaceState(null, "", `#${route}`);
+  document.body.dataset.route = route;
   if (route === "canvas") renderCanvas();
   if (route === "graph") renderAllGraph();
   if (route === "persona") renderPersonas();
@@ -441,7 +448,7 @@ function saveNoteFromForm() {
     if (anchor && !note.anchors.some((item) => item.blockId === anchor.blockId && item.quote === anchor.quote)) note.anchors.push(anchor);
     if (anchor) applyHighlight(anchor, id, payload.color);
   } else {
-    const note = { id: uid("note"), ...payload, anchors: anchor ? [anchor] : [], links: [], footnotes: [], x: 180 + state.notes.length * 42, y: 110 + state.notes.length * 34 };
+    const note = { id: uid("note"), ...payload, textColor:state.visualSettings.textColor, highlightColor:state.visualSettings.highlightColor, anchors: anchor ? [anchor] : [], links: [], footnotes: [], x: 180 + state.notes.length * 42, y: 110 + state.notes.length * 34 };
     state.notes.push(note);
     if (anchor) applyHighlight(anchor, note.id, payload.color);
   }
@@ -883,6 +890,32 @@ function installFootnotes(node,note){
  section.append(items,add);node.append(section);
 }
 
+function applyVisualSettings(){
+ const settings=state.visualSettings={...VISUAL_DEFAULTS,...(state.visualSettings||{})};
+ const root=document.documentElement;
+ root.style.setProperty('--graph-node-size',settings.graphNodeSize+'px');
+ root.style.setProperty('--graph-link-width',settings.graphLinkWidth+'px');
+ root.style.setProperty('--graph-similarity-link-width',(settings.graphLinkWidth*.75)+'px');
+ root.style.setProperty('--canvas-link-width',settings.canvasLinkWidth+'px');
+ root.style.setProperty('--canvas-link-opacity',settings.canvasLinkOpacity);
+ const values={
+  'graph-node-size':[settings.graphNodeSize,String(settings.graphNodeSize)],
+  'graph-link-width':[settings.graphLinkWidth,String(settings.graphLinkWidth)],
+  'canvas-link-width':[settings.canvasLinkWidth,String(settings.canvasLinkWidth)],
+  'canvas-link-opacity':[settings.canvasLinkOpacity,Math.round(settings.canvasLinkOpacity*100)+'%']
+ };
+ Object.entries(values).forEach(([id,[value,label]])=>{const input=$('#'+id),output=$('#'+id+'-output');if(input)input.value=value;if(output)output.value=label;});
+}
+function bindViewSettings(){
+ const controls={
+  'graph-node-size':'graphNodeSize',
+  'graph-link-width':'graphLinkWidth',
+  'canvas-link-width':'canvasLinkWidth',
+  'canvas-link-opacity':'canvasLinkOpacity'
+ };
+ Object.entries(controls).forEach(([id,key])=>{const input=$('#'+id);if(!input)return;input.oninput=()=>{state.visualSettings[key]=Number(input.value);applyVisualSettings();saveState();};});
+ applyVisualSettings();
+}
 function applyCanvasPanels(){
  const split=$("#canvas-split");if(!split)return;
  state.canvasPanels ||= {source:true,search:true};
@@ -890,6 +923,9 @@ function applyCanvasPanels(){
  split.classList.toggle('search-hidden',!state.canvasPanels.search);
  $("#toggle-source-pane")?.setAttribute('aria-pressed',String(state.canvasPanels.source));
  $("#toggle-search-pane")?.setAttribute('aria-pressed',String(state.canvasPanels.search));
+  const sourceLabel=$("#toggle-source-pane small"),searchLabel=$("#toggle-search-pane small");
+  if(sourceLabel)sourceLabel.textContent=state.canvasPanels.source?"ON":"OFF";
+  if(searchLabel)searchLabel.textContent=state.canvasPanels.search?"ON":"OFF";
  requestAnimationFrame(()=>{renderEdges();renderCrossLinks();});
 }
 
@@ -1157,7 +1193,7 @@ function paintAllGraph() { $("#all-graph-world").style.transform = 'translate(' 
 function focusAllGraphNode(id){
  const node=$(`.all-graph-item[data-note-id="${CSS.escape(id)}"]`),stage=$("#all-graph-stage");if(!node||!stage)return;
  if(allGraphAnimationFrame)cancelAnimationFrame(allGraphAnimationFrame);
- const center={x:parseFloat(node.style.left)+42,y:parseFloat(node.style.top)+42},from={x:allGraphPan.x,y:allGraphPan.y,zoom:allGraphZoom};
+ const half=state.visualSettings.graphNodeSize/2,center={x:parseFloat(node.style.left)+half,y:parseFloat(node.style.top)+half},from={x:allGraphPan.x,y:allGraphPan.y,zoom:allGraphZoom};
  const zoom=Math.min(2.2,Math.max(1.15,allGraphZoom*1.18)),target={x:stage.clientWidth/2-center.x*zoom,y:stage.clientHeight/2-center.y*zoom},began=performance.now();
  const step=(now)=>{const t=Math.min(1,(now-began)/320),ease=1-Math.pow(1-t,3);allGraphZoom=from.zoom+(zoom-from.zoom)*ease;allGraphPan={x:from.x+(target.x-from.x)*ease,y:from.y+(target.y-from.y)*ease};paintAllGraph();if(t<1)allGraphAnimationFrame=requestAnimationFrame(step);else allGraphAnimationFrame=0;};
  allGraphAnimationFrame=requestAnimationFrame(step);
@@ -1207,7 +1243,7 @@ function renderAllGraph() {
   notes.forEach(note=>{
     const p=positions.get(note.id), anchor=(note.anchors||[])[0], block=state.blocks.find(item=>item.id===anchor?.blockId), subject=block?.subject||'자유';
     const item=document.createElement('button');item.type='button';item.className='all-graph-item';item.dataset.noteId=note.id;
-    item.style.left=(p.x-42)+'px';item.style.top=(p.y-42)+'px';item.style.setProperty('--graph-color',/^#[0-9a-fA-F]{6}$/.test(note.color||'')?note.color:'#5865f2');
+    const half=state.visualSettings.graphNodeSize/2;item.style.left=(p.x-half)+'px';item.style.top=(p.y-half)+'px';item.style.setProperty('--graph-color',/^#[0-9a-fA-F]{6}$/.test(note.color||'')?note.color:'#5865f2');
     item.innerHTML='<span class="all-graph-circle"><span>'+escapeHtml(noteCanvas(note))+'</span><span>'+escapeHtml(subject)+'</span></span><span class="all-graph-title">'+escapeHtml(note.title)+'</span>';
     item.onclick=()=>{showAllGraphNote(note);focusAllGraphNode(note.id);};nodes.append(item);
     (note.links||[]).forEach(id=>{if(!known.has(id))return;const key=[note.id,id].sort().join('::');if(drawn.has(key))return;drawn.add(key);const q=positions.get(id),line=document.createElementNS('http://www.w3.org/2000/svg','line');line.dataset.noteA=note.id;line.dataset.noteB=id;line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.append(line);});
@@ -1444,6 +1480,8 @@ function createInlineCanvasNote(position=null) {
     body: "",
     category: "자유 메모",
     color: "#5865f2",
+    textColor: state.visualSettings.textColor,
+    highlightColor: state.visualSettings.highlightColor,
     tags: [],
     anchors: [],
     links: [],
@@ -1483,11 +1521,11 @@ function deleteNoteWithConfirmation(id) {
 }
 
 function bindEvents() {
+  bindViewSettings();
   $$(".nav-item").forEach((item) => item.addEventListener("click", () => routeTo(item.dataset.route)));
   $(".brand").addEventListener("click", (event) => { event.preventDefault(); routeTo("canvas"); });
   $("#upload-card").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-upload").addEventListener("click", () => $("#pdf-input").click());
-  $("#canvas-graph").addEventListener("click",()=>routeTo("graph"));
   $("#all-graph-fit").addEventListener("click",fitAllGraph);
   $("#all-graph-back").addEventListener("click",()=>routeTo("canvas"));
   installAllGraphPan();
@@ -1623,6 +1661,28 @@ function safeNoteHtml(value){
   }
  });walk(tpl.content);return tpl.innerHTML;
 }
+function formatColor(kind){
+ const key=kind==='highlight'?'highlightColor':'textColor';
+ return state.visualSettings?.[key] || VISUAL_DEFAULTS[key];
+}
+function syncFormatColor(kind,color){
+ if(!/^#[0-9a-f]{6}$/i.test(color))return;
+ const key=kind==='highlight'?'highlightColor':'textColor';
+ state.visualSettings[key]=color;
+ state.notes.forEach(note=>{
+  note[key]=color;
+  if(!note.bodyHtml)return;
+  const tpl=document.createElement('template');tpl.innerHTML=note.bodyHtml;
+  if(kind==='highlight')tpl.content.querySelectorAll('mark.note-highlight').forEach(mark=>mark.style.setProperty('--highlight-color',color));
+  else tpl.content.querySelectorAll('span[style*="color"]').forEach(span=>span.style.color=color);
+  note.bodyHtml=safeNoteHtml(tpl.innerHTML);
+ });
+ $$('[data-format-color="'+kind+'"]').forEach(button=>button.style.setProperty('--tool-color',color));
+ $$('.'+(kind==='highlight'?'highlight-color-menu':'text-color-menu')+' input[type="color"]').forEach(input=>input.value=color);
+ if(kind==='highlight')$$('#node-layer .node-body-edit mark.note-highlight').forEach(mark=>mark.style.setProperty('--highlight-color',color));
+ else $$('#node-layer .node-body-edit span[style*="color"]').forEach(span=>span.style.color=color);
+ saveState();
+}
 let activeFormattingPicker=null;
 function showFormattingPicker(menu,trigger,onOutside){
  if(activeFormattingPicker)activeFormattingPicker.close(true);
@@ -1659,18 +1719,18 @@ function installFormatting(node,editor,note){
  [['B','굵게','bold'],['U','밑줄','underline']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.onpointerdown=event=>{event.preventDefault();remember();};button.onclick=()=>{const sel=restore();if(sel.rangeCount)document.execCommand(command,false,null);persist();};toolbar.append(button);});
  const chevron=()=>{const button=document.createElement('button');button.type='button';button.className='format-color-chevron';button.innerHTML='<svg viewBox="0 0 12 8" aria-hidden="true"><path d="m2 2 4 4 4-4"/></svg>';return button;};
  const highGroup=document.createElement('span');highGroup.className='format-split';
- const high=document.createElement('button');high.type='button';high.className='format-icon format-highlight';high.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 7-7 4 4-7 7H7zM13 9l4 4M5 20h10"/></svg>';high.title='형광펜';high.style.setProperty('--tool-color',note.highlightColor||'#f6dc62');
- const highArrow=chevron();highArrow.title='형광펜 색 선택';highArrow.setAttribute('aria-label','형광펜 색 선택');
- const highMenu=picker('highlight-color-menu',note.highlightColor||'#f6dc62',color=>{note.highlightColor=color;high.style.setProperty('--tool-color',color);highArrow.style.setProperty('--tool-color',color);saveState();},()=>activeFormattingPicker?.close(false));
+ const high=document.createElement('button');high.type='button';high.className='format-icon format-highlight';high.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 7-7 4 4-7 7H7zM13 9l4 4M5 20h10"/></svg>';high.title='형광펜';high.style.setProperty('--tool-color',formatColor('highlight'));
+ const highArrow=chevron();highArrow.title='형광펜 색 선택';highArrow.setAttribute('aria-label','형광펜 색 선택');high.dataset.formatColor='highlight';highArrow.dataset.formatColor='highlight';
+ const highMenu=picker('highlight-color-menu',formatColor('highlight'),color=>{syncFormatColor('highlight',color);},()=>activeFormattingPicker?.close(false));
  const rememberPointer=event=>{event.preventDefault();remember();};high.onpointerdown=rememberPointer;highArrow.onpointerdown=rememberPointer;
- high.onclick=()=>{const sel=restore();if(!sel.rangeCount)return;const range=sel.getRangeAt(0),parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement,mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.className='note-highlight';wrapper.style.setProperty('--highlight-color',note.highlightColor||'#f6dc62');wrapper.append(range.extractContents());range.insertNode(wrapper);}persist();};
+ high.onclick=()=>{const sel=restore();if(!sel.rangeCount)return;const range=sel.getRangeAt(0),parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement,mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.className='note-highlight';wrapper.style.setProperty('--highlight-color',formatColor('highlight'));wrapper.append(range.extractContents());range.insertNode(wrapper);}persist();};
  highArrow.onclick=event=>{event.stopPropagation();if(activeFormattingPicker?.menu===highMenu)activeFormattingPicker.close(false);else showFormattingPicker(highMenu,highArrow);};
  highGroup.append(high,highArrow);toolbar.append(highGroup);
  const textGroup=document.createElement('span');textGroup.className='format-split';
- const text=document.createElement('button');text.type='button';text.className='format-icon format-text-color';text.textContent='A';text.title='글자 색';text.style.setProperty('--tool-color',note.textColor||'#e34b55');
- const textArrow=chevron();textArrow.title='글자 색 선택';textArrow.setAttribute('aria-label','글자 색 선택');textArrow.style.setProperty('--tool-color',note.textColor||'#e34b55');
- const applyText=()=>{if(!savedRange||savedRange.collapsed||!editor.contains(savedRange.commonAncestorContainer))return;editor.contentEditable='true';const sel=restore();if(!sel.rangeCount)return;document.execCommand('foreColor',false,note.textColor||'#e34b55');persist();editor.contentEditable='false';};
- const textMenu=picker('text-color-menu',note.textColor||'#e34b55',color=>{note.textColor=color;text.style.setProperty('--tool-color',color);textArrow.style.setProperty('--tool-color',color);saveState();},()=>activeFormattingPicker?.close(true));
+ const text=document.createElement('button');text.type='button';text.className='format-icon format-text-color';text.textContent='A';text.title='글자 색';text.style.setProperty('--tool-color',formatColor('text'));
+ const textArrow=chevron();textArrow.title='글자 색 선택';textArrow.setAttribute('aria-label','글자 색 선택');text.dataset.formatColor='text';textArrow.dataset.formatColor='text';textArrow.style.setProperty('--tool-color',formatColor('text'));
+ const applyText=()=>{if(!savedRange||savedRange.collapsed||!editor.contains(savedRange.commonAncestorContainer))return;editor.contentEditable='true';const sel=restore();if(!sel.rangeCount)return;document.execCommand('foreColor',false,formatColor('text'));persist();editor.contentEditable='false';};
+ const textMenu=picker('text-color-menu',formatColor('text'),color=>{syncFormatColor('text',color);},()=>activeFormattingPicker?.close(true));
  text.onpointerdown=rememberPointer;textArrow.onpointerdown=rememberPointer;text.onclick=event=>{event.stopPropagation();applyText();};
  textArrow.onclick=event=>{event.stopPropagation();if(activeFormattingPicker?.menu===textMenu)activeFormattingPicker.close(true);else showFormattingPicker(textMenu,textArrow,applyText);};
  textGroup.append(text,textArrow);toolbar.append(textGroup);toolbar.insertBefore(textGroup,highGroup);editor.before(toolbar);
