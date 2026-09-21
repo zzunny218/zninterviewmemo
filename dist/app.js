@@ -638,10 +638,12 @@ function renderCrossLinks() {
     const node = $(`.canvas-node[data-note-id="${CSS.escape(mark.dataset.noteId)}"]`);
     if (!node) return;
     const textRect = mark.getBoundingClientRect(), noteRect = node.getBoundingClientRect();
-    const noteVisible = noteRect.right > stageRect.left && noteRect.left < stageRect.right && noteRect.bottom > stageRect.top && noteRect.top < stageRect.bottom;
-    if(!noteVisible)return;
-    const textEdge = clampPointToRect({x:textRect.right,y:textRect.top+textRect.height/2},sourceRect,5);
-    const noteCenter = clampPointToRect({x:noteRect.left+noteRect.width/2,y:noteRect.top+noteRect.height/2},stageRect,5);
+    const noteCenter={x:noteRect.left+noteRect.width/2,y:noteRect.top+noteRect.height/2};
+    const textCenterY=textRect.top+textRect.height/2;
+    const noteCenterVisible=noteCenter.x>=stageRect.left&&noteCenter.x<=stageRect.right&&noteCenter.y>=stageRect.top&&noteCenter.y<=stageRect.bottom;
+    const textVisible=textRect.right>sourceRect.left&&textRect.left<sourceRect.right&&textCenterY>=sourceRect.top&&textCenterY<=sourceRect.bottom;
+    if(!noteCenterVisible||!textVisible)return;
+    const textEdge={x:textRect.right,y:textCenterY};
     const start={x:textEdge.x-splitRect.left,y:textEdge.y-splitRect.top},end={x:noteCenter.x-splitRect.left,y:noteCenter.y-splitRect.top};
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.dataset.noteId=mark.dataset.noteId;
@@ -1044,7 +1046,8 @@ function renderEdges(){
   const key=[id,targetId].sort().join('::');if(drawn.has(key))return;drawn.add(key);
   const a=$('.canvas-node[data-note-id="'+CSS.escape(id)+'"]'),b=$('.canvas-node[data-note-id="'+CSS.escape(targetId)+'"]');if(!a||!b)return;
   const ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();const points=[{x:ar.left+ar.width/2-origin.left,y:ar.top+ar.height/2-origin.top},{x:br.left+br.width/2-origin.left,y:br.top+br.height/2-origin.top}];
-  const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',curvedPath(...points));svg.append(path);
+  if(points.some(point=>!Number.isFinite(point.x)||!Number.isFinite(point.y)))return;
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.dataset.from=id;path.dataset.to=targetId;path.setAttribute('d',curvedPath(...points));svg.append(path);
  };
  canvasItems().forEach(n=>(n.links||[]).forEach(id=>draw(n.id,id)));
 
@@ -1604,9 +1607,11 @@ let activeFormattingPicker=null;
 function showFormattingPicker(menu,trigger,onOutside){
  if(activeFormattingPicker)activeFormattingPicker.close(true);
  menu.hidden=false;
- const triggerRect=trigger.getBoundingClientRect(),menuRect=menu.getBoundingClientRect();
+ const anchor=trigger.closest('.format-split')||trigger;
+ const triggerRect=anchor.getBoundingClientRect(),menuRect=menu.getBoundingClientRect();
  menu.style.left=Math.max(8,Math.min(innerWidth-menuRect.width-8,triggerRect.left))+'px';
- menu.style.top=(triggerRect.bottom+8+menuRect.height<innerHeight?triggerRect.bottom+8:triggerRect.top-menuRect.height-8)+'px';
+ // 팔레트는 메모 확대·이동과 무관하게 버튼 바로 아래에 고정한다.
+ menu.style.top=Math.min(innerHeight-menuRect.height-8,triggerRect.bottom+6)+'px';
  activeFormattingPicker={menu,trigger,close:(commit=true)=>{
   menu.hidden=true;
   if(activeFormattingPicker?.menu===menu)activeFormattingPicker=null;
@@ -1628,7 +1633,7 @@ function installFormatting(node,editor,note){
   const menu=document.createElement('div');menu.className=klass+' floating-color-menu';menu.hidden=true;
   const quick=document.createElement('div');quick.className='quick-color-row';
   colors.forEach(color=>{const choice=document.createElement('button');choice.type='button';choice.style.setProperty('--picker-color',color);choice.setAttribute('aria-label',color+' 선택');choice.onpointerdown=event=>event.preventDefault();choice.onclick=()=>{apply(color);finish();};quick.append(choice);});
-  const spectrumRow=document.createElement('label');spectrumRow.className='spectrum-color-row';spectrumRow.innerHTML='<span>직접 선택</span>';
+  const spectrumRow=document.createElement('label');spectrumRow.className='spectrum-color-row';spectrumRow.innerHTML='<span>스펙트럼</span>';
   const spectrum=document.createElement('input');spectrum.type='color';spectrum.value=initial;spectrum.setAttribute('aria-label','스펙트럼에서 색 선택');spectrum.oninput=()=>apply(spectrum.value);spectrumRow.append(spectrum);menu.append(quick,spectrumRow);document.body.append(menu);return menu;
  };
  [['B','굵게','bold'],['U','밑줄','underline']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.onpointerdown=event=>{event.preventDefault();remember();};button.onclick=()=>{const sel=restore();if(sel.rangeCount)document.execCommand(command,false,null);persist();};toolbar.append(button);});
@@ -1640,7 +1645,7 @@ function installFormatting(node,editor,note){
  const rememberPointer=event=>{event.preventDefault();remember();};high.onpointerdown=rememberPointer;highArrow.onpointerdown=rememberPointer;
  high.onclick=()=>{const sel=restore();if(!sel.rangeCount)return;const range=sel.getRangeAt(0),parent=range.commonAncestorContainer.nodeType===1?range.commonAncestorContainer:range.commonAncestorContainer.parentElement,mark=parent?.closest('mark');if(mark&&editor.contains(mark))mark.replaceWith(...mark.childNodes);else if(!range.collapsed){const wrapper=document.createElement('mark');wrapper.className='note-highlight';wrapper.style.setProperty('--highlight-color',note.highlightColor||'#f6dc62');wrapper.append(range.extractContents());range.insertNode(wrapper);}persist();};
  highArrow.onclick=event=>{event.stopPropagation();if(activeFormattingPicker?.menu===highMenu)activeFormattingPicker.close(false);else showFormattingPicker(highMenu,highArrow);};
- highGroup.append(high,highArrow);toolbar.append(highGroup,highMenu);
+ highGroup.append(high,highArrow);toolbar.append(highGroup);
  const textGroup=document.createElement('span');textGroup.className='format-split';
  const text=document.createElement('button');text.type='button';text.className='format-icon format-text-color';text.textContent='A';text.title='글자 색';text.style.setProperty('--tool-color',note.textColor||'#e34b55');
  const textArrow=chevron();textArrow.title='글자 색 선택';textArrow.setAttribute('aria-label','글자 색 선택');textArrow.style.setProperty('--tool-color',note.textColor||'#e34b55');
@@ -1648,7 +1653,7 @@ function installFormatting(node,editor,note){
  const textMenu=picker('text-color-menu',note.textColor||'#e34b55',color=>{note.textColor=color;text.style.setProperty('--tool-color',color);textArrow.style.setProperty('--tool-color',color);saveState();},()=>activeFormattingPicker?.close(true));
  text.onpointerdown=rememberPointer;textArrow.onpointerdown=rememberPointer;text.onclick=event=>{event.stopPropagation();applyText();};
  textArrow.onclick=event=>{event.stopPropagation();if(activeFormattingPicker?.menu===textMenu)activeFormattingPicker.close(true);else showFormattingPicker(textMenu,textArrow,applyText);};
- textGroup.append(text,textArrow);toolbar.append(textGroup,textMenu);toolbar.insertBefore(textGroup,highGroup);toolbar.insertBefore(textMenu,highGroup);editor.before(toolbar);
+ textGroup.append(text,textArrow);toolbar.append(textGroup);toolbar.insertBefore(textGroup,highGroup);editor.before(toolbar);
  editor.addEventListener('paste',event=>{event.preventDefault();document.execCommand('insertText',false,event.clipboardData.getData('text/plain'));persist();});
 }
 function storeNodePosition(node){
