@@ -134,6 +134,10 @@ let allGraphZoom = 1;
 let allGraphPan = {x:0,y:0};
 let selectedAllGraphNoteId = null;
 let canvasFilters = { query: "", category: "전체", grade: "전체", subject: "전체" };
+let canvasContextPoint = null;
+let allGraphAnimationFrame = 0;
+const CANVAS_MIN_ZOOM = .15;
+const CANVAS_MAX_ZOOM = 2;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -590,24 +594,23 @@ function renderCanvasSource() {
   };
 }
 
+function clampPointToRect(point,rect,inset=4){
+  return {x:Math.max(rect.left+inset,Math.min(rect.right-inset,point.x)),y:Math.max(rect.top+inset,Math.min(rect.bottom-inset,point.y))};
+}
 function renderCrossLinks() {
-  const svg = $("#cross-link-layer");
-  const split = $("#canvas-split");
-  if (!svg || !split || innerWidth <= 760) return;
+  const svg = $("#cross-link-layer"), split = $("#canvas-split"), sourceViewport = $(".canvas-source-scroll"), stage = $("#canvas-stage");
+  if (!svg || !split || !sourceViewport || !stage || innerWidth <= 760) return;
   svg.innerHTML = "";
-  const splitRect = split.getBoundingClientRect();
+  const splitRect = split.getBoundingClientRect(), sourceRect = sourceViewport.getBoundingClientRect(), stageRect = stage.getBoundingClientRect();
   document.querySelectorAll("#record-table mark[data-note-id], #canvas-source-document mark[data-note-id]").forEach((mark) => {
     const node = $(`.canvas-node[data-note-id="${CSS.escape(mark.dataset.noteId)}"]`);
     if (!node) return;
-    const a = mark.getBoundingClientRect();
-    const b = node.getBoundingClientRect();
-    const start = { x: a.right - splitRect.left + 4, y: a.top + a.height / 2 - splitRect.top };
-    const end = { x: b.left - splitRect.left - 5, y: b.top + b.height / 2 - splitRect.top };
-    const linkColor = state.notes.find((note) => note.id === mark.dataset.noteId)?.color || "#5865f2";
+    const textRect = mark.getBoundingClientRect(), noteRect = node.getBoundingClientRect();
+    const textEdge = clampPointToRect({x:textRect.right,y:textRect.top+textRect.height/2},sourceRect,5);
+    const noteCenter = clampPointToRect({x:noteRect.left+noteRect.width/2,y:noteRect.top+noteRect.height/2},stageRect,5);
+    const start={x:textEdge.x-splitRect.left,y:textEdge.y-splitRect.top},end={x:noteCenter.x-splitRect.left,y:noteCenter.y-splitRect.top};
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.style.stroke = linkColor;
-    const points = closestPoints(a,b).map(p=>({x:p.x-splitRect.left,y:p.y-splitRect.top}));
-    Object.assign(start,points[0]); Object.assign(end,points[1]);
+    path.dataset.noteId=mark.dataset.noteId;
     path.setAttribute("d",`M ${start.x} ${start.y} L ${end.x} ${end.y}`);
     svg.append(path);
   });
@@ -670,9 +673,13 @@ function jumpToNote(id){
  graphMode=false;renderCanvas();requestAnimationFrame(()=>{const node=$('.canvas-node[data-note-id="'+CSS.escape(id)+'"]');if(node)focusCanvasNote(node);});
 }
 
+function noteVisibleOnCanvas(note){
+ const home=noteCanvas(note),whole=recordTab.match(/^([12]학년) 전체$/);
+ return whole ? home.startsWith(whole[1]+' ') : home===recordTab;
+}
 function canvasItems() {
   state.canvasPositions ||= {};
-  const noteItems = state.notes.filter(note=>noteCanvas(note)===recordTab).map((note) => ({ ...note, kind: "note", context: noteContext(note), sourceNote: note }));
+  const noteItems = state.notes.filter(noteVisibleOnCanvas).map((note) => ({ ...note, kind: "note", context: noteContext(note), sourceNote: note }));
   const personas = derivePersonas().slice(0, 0).map((persona, index) => {
     const notes = persona.noteIds.map((id) => state.notes.find((note) => note.id === id)).filter(Boolean);
     const anchors = notes.flatMap((note) => note.anchors);
@@ -707,6 +714,8 @@ function canvasItems() {
 }
 
 function renderCanvas() {
+  if(activeFormattingPicker)activeFormattingPicker.close(false);
+  $$('.floating-color-menu').forEach((menu)=>menu.remove());
   renderCanvasSource();
   renderRecordTable();
   const layer = $("#node-layer");
@@ -1041,6 +1050,14 @@ function allGraphPositions(notes) {
   return positions;
 }
 function paintAllGraph() { $("#all-graph-world").style.transform = 'translate(' + allGraphPan.x + 'px,' + allGraphPan.y + 'px) scale(' + allGraphZoom + ')'; }
+function focusAllGraphNode(id){
+ const node=$(`.all-graph-item[data-note-id="${CSS.escape(id)}"]`),stage=$("#all-graph-stage");if(!node||!stage)return;
+ if(allGraphAnimationFrame)cancelAnimationFrame(allGraphAnimationFrame);
+ const center={x:parseFloat(node.style.left)+42,y:parseFloat(node.style.top)+42},from={x:allGraphPan.x,y:allGraphPan.y,zoom:allGraphZoom};
+ const zoom=Math.min(2.2,Math.max(1.15,allGraphZoom*1.18)),target={x:stage.clientWidth/2-center.x*zoom,y:stage.clientHeight/2-center.y*zoom},began=performance.now();
+ const step=(now)=>{const t=Math.min(1,(now-began)/320),ease=1-Math.pow(1-t,3);allGraphZoom=from.zoom+(zoom-from.zoom)*ease;allGraphPan={x:from.x+(target.x-from.x)*ease,y:from.y+(target.y-from.y)*ease};paintAllGraph();if(t<1)allGraphAnimationFrame=requestAnimationFrame(step);else allGraphAnimationFrame=0;};
+ allGraphAnimationFrame=requestAnimationFrame(step);
+}
 function fitAllGraph() {
   const stage = $("#all-graph-stage");
   allGraphZoom = Math.min(1, Math.max(.25, Math.min(stage.clientWidth / 1700, stage.clientHeight / 1100) * .92));
@@ -1055,7 +1072,7 @@ function showAllGraphNote(note) {
   const panel = $("#all-graph-detail");
   panel.innerHTML = '<span class="graph-detail-meta">' + escapeHtml(noteCanvas(note)) + ' · ' + escapeHtml(noteContext(note).subjects.join(', ') || note.category) + '</span><h2>' + escapeHtml(note.title) + '</h2><div class="graph-detail-body">' + safeNoteHtml(note.bodyHtml || escapeHtml(note.body || '')) + '</div>' + (anchors ? '<h3>근거</h3><ul>' + anchors + '</ul>' : '') + (links.length ? '<h3>연결</h3><div class="graph-detail-links"></div>' : '') + '<button type="button" class="primary-button graph-open-note">캔버스에서 열기</button>';
   const linkBox = panel.querySelector('.graph-detail-links');
-  links.forEach(other => {const button = document.createElement('button');button.type='button';button.textContent=other.title;button.onclick=()=>showAllGraphNote(other);linkBox?.append(button);});
+  links.forEach(other => {const button = document.createElement('button');button.type='button';button.textContent=other.title;button.onclick=()=>{showAllGraphNote(other);focusAllGraphNode(other.id);};linkBox?.append(button);});
   panel.querySelector('.graph-open-note').onclick=()=>{routeTo('canvas');jumpToNote(note.id);};
 }
 function renderAllGraph() {
@@ -1068,7 +1085,7 @@ function renderAllGraph() {
     const item=document.createElement('button');item.type='button';item.className='all-graph-item';item.dataset.noteId=note.id;
     item.style.left=(p.x-42)+'px';item.style.top=(p.y-42)+'px';item.style.setProperty('--graph-color',/^#[0-9a-fA-F]{6}$/.test(note.color||'')?note.color:'#5865f2');
     item.innerHTML='<span class="all-graph-circle"><span>'+escapeHtml(noteCanvas(note))+'</span><span>'+escapeHtml(subject)+'</span></span><span class="all-graph-title">'+escapeHtml(note.title)+'</span>';
-    item.onclick=()=>showAllGraphNote(note);nodes.append(item);
+    item.onclick=()=>{showAllGraphNote(note);focusAllGraphNode(note.id);};nodes.append(item);
     (note.links||[]).forEach(id=>{if(!known.has(id))return;const key=[note.id,id].sort().join('::');if(drawn.has(key))return;drawn.add(key);const q=positions.get(id),line=document.createElementNS('http://www.w3.org/2000/svg','line');line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.append(line);});
   });
   // 유사 관계는 그래프에만 그리며 메모의 실제 연결 목록을 바꾸지 않는다.
@@ -1091,13 +1108,16 @@ function installAllGraphPan() {
   const stage = $("#all-graph-stage");
   stage.addEventListener('pointerdown',event=>{
     if(event.button!==0||event.target.closest('.all-graph-item'))return;
+    if(allGraphAnimationFrame){cancelAnimationFrame(allGraphAnimationFrame);allGraphAnimationFrame=0;}
     stage.setPointerCapture(event.pointerId);stage.classList.add('panning');
-    const start={x:event.clientX,y:event.clientY,panX:allGraphPan.x,panY:allGraphPan.y};
-    const move=e=>{allGraphPan={x:start.panX+e.clientX-start.x,y:start.panY+e.clientY-start.y};paintAllGraph();};
-    const up=()=>{stage.classList.remove('panning');stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',up);stage.removeEventListener('pointercancel',up);};
+    const start={x:event.clientX,y:event.clientY,panX:allGraphPan.x,panY:allGraphPan.y,time:performance.now()};let target={...allGraphPan},velocity={x:0,y:0},last={...allGraphPan,time:start.time},frame=0;
+    const paint=()=>{allGraphPan.x+=(target.x-allGraphPan.x)*.42;allGraphPan.y+=(target.y-allGraphPan.y)*.42;paintAllGraph();if(Math.abs(target.x-allGraphPan.x)+Math.abs(target.y-allGraphPan.y)>.2)frame=requestAnimationFrame(paint);else frame=0;};
+    const move=e=>{const now=performance.now();target={x:start.panX+e.clientX-start.x,y:start.panY+e.clientY-start.y};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
+    const glide=()=>{velocity.x*=.91;velocity.y*=.91;allGraphPan.x+=velocity.x;allGraphPan.y+=velocity.y;paintAllGraph();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)allGraphAnimationFrame=requestAnimationFrame(glide);else allGraphAnimationFrame=0;};
+    const up=()=>{stage.classList.remove('panning');stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',up);stage.removeEventListener('pointercancel',up);if(frame)cancelAnimationFrame(frame);allGraphAnimationFrame=requestAnimationFrame(glide);};
     stage.addEventListener('pointermove',move);stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
   });
-  stage.addEventListener('wheel',event=>{event.preventDefault();const rect=stage.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,next=Math.min(2,Math.max(.2,allGraphZoom*(event.deltaY<0?1.1:.9)));allGraphPan={x:x-(x-allGraphPan.x)*next/allGraphZoom,y:y-(y-allGraphPan.y)*next/allGraphZoom};allGraphZoom=next;paintAllGraph();},{passive:false});
+  stage.addEventListener('wheel',event=>{event.preventDefault();if(allGraphAnimationFrame){cancelAnimationFrame(allGraphAnimationFrame);allGraphAnimationFrame=0;}const rect=stage.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,next=Math.min(2.4,Math.max(.12,allGraphZoom*(event.deltaY<0?1.1:.9)));allGraphPan={x:x-(x-allGraphPan.x)*next/allGraphZoom,y:y-(y-allGraphPan.y)*next/allGraphZoom};allGraphZoom=next;paintAllGraph();},{passive:false});
 }
 
 function renderPersonas() {
@@ -1292,7 +1312,7 @@ function renderAll() {
   renderInterview();
 }
 
-function createInlineCanvasNote() {
+function createInlineCanvasNote(position=null) {
   const note = {
     id: uid("note"),
     canvasTab:recordTab,
@@ -1303,8 +1323,8 @@ function createInlineCanvasNote() {
     tags: [],
     anchors: [],
     links: [],
-    x: (70-canvasPan.x)/canvasZoom + (state.notes.length % 3) * 38,
-    y: (80-canvasPan.y)/canvasZoom + (state.notes.length % 4) * 42,
+    x: position?.x ?? (70-canvasPan.x)/canvasZoom + (state.notes.length % 3) * 38,
+    y: position?.y ?? (80-canvasPan.y)/canvasZoom + (state.notes.length % 4) * 42,
     collapsed: false
   };
   state.notes.push(note);
@@ -1343,7 +1363,6 @@ function bindEvents() {
   $(".brand").addEventListener("click", (event) => { event.preventDefault(); routeTo("canvas"); });
   $("#upload-card").addEventListener("click", () => $("#pdf-input").click());
   $("#canvas-upload").addEventListener("click", () => $("#pdf-input").click());
-  $("#canvas-new-note").addEventListener("click", createInlineCanvasNote);
   $("#canvas-graph").addEventListener("click",()=>routeTo("graph"));
   $("#all-graph-fit").addEventListener("click",fitAllGraph);
   $("#all-graph-back").addEventListener("click",()=>routeTo("canvas"));
@@ -1359,7 +1378,11 @@ function bindEvents() {
     if (note) openNoteDialog(note);
     else toast("이 문장은 하이라이트만 되어 있어요.");
   });
-  document.addEventListener("pointerdown", (event) => { if (!event.target.closest("#selection-menu")) $("#selection-menu").hidden = true; });
+  document.addEventListener("pointerdown", (event) => {
+    if (!event.target.closest("#selection-menu")) $("#selection-menu").hidden = true;
+    if (!event.target.closest("#canvas-context-menu")) $("#canvas-context-menu").hidden = true;
+  });
+  $("#canvas-context-new-note").addEventListener("click",()=>{const point=canvasContextPoint;$("#canvas-context-menu").hidden=true;createInlineCanvasNote(point);});
   $$("[data-selection-action]").forEach((button) => button.addEventListener("click", () => {
     const action = button.dataset.selectionAction;
     $("#selection-menu").hidden = true;
@@ -1406,26 +1429,26 @@ function bindEvents() {
   });
   $("#refresh-persona").addEventListener("click", () => { renderPersonas(); toast("현재 근거로 캐릭터를 다시 정리했어요."); });
   
-  $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(1.5, canvasZoom + .1); saveCanvasView(); renderCanvas(); });
-  $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(.6, canvasZoom - .1); saveCanvasView(); renderCanvas(); });
+  $("#zoom-in").addEventListener("click", () => { canvasZoom = Math.min(CANVAS_MAX_ZOOM, canvasZoom + .1); saveCanvasView(); renderCanvas(); });
+  $("#zoom-out").addEventListener("click", () => { canvasZoom = Math.max(CANVAS_MIN_ZOOM, canvasZoom - .1); saveCanvasView(); renderCanvas(); });
   $("#canvas-reset").addEventListener("click", () => { fitCanvas(); saveCanvasView(); });
   $("#canvas-stage").addEventListener("wheel", (event) => {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
-    canvasZoom = Math.max(.5, Math.min(1.8, canvasZoom + (event.deltaY < 0 ? .1 : -.1)));
+    canvasZoom = Math.max(CANVAS_MIN_ZOOM, Math.min(CANVAS_MAX_ZOOM, canvasZoom + (event.deltaY < 0 ? .1 : -.1)));
     renderCanvas();
   }, { passive: false });
   $("#canvas-stage").addEventListener("keydown", (event) => {
     if(event.target.closest("[contenteditable],input,textarea"))return;
-    if (event.key === "+" || event.key === "=") { event.preventDefault(); canvasZoom = Math.min(1.8, canvasZoom + .1); renderCanvas(); }
-    if (event.key === "-") { event.preventDefault(); canvasZoom = Math.max(.5, canvasZoom - .1); renderCanvas(); }
+    if (event.key === "+" || event.key === "=") { event.preventDefault(); canvasZoom = Math.min(CANVAS_MAX_ZOOM, canvasZoom + .1); renderCanvas(); }
+    if (event.key === "-") { event.preventDefault(); canvasZoom = Math.max(CANVAS_MIN_ZOOM, canvasZoom - .1); renderCanvas(); }
     if (event.key === "0") { event.preventDefault(); canvasZoom = 1; renderCanvas(); }
   });
   $("#close-note-panel").addEventListener("click", () => $("#note-panel").classList.remove("open"));
   $("#show-all-button").addEventListener("click", openSearch);
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); openSearch(); }
-    if (event.key === "Escape") $("#selection-menu").hidden = true;
+    if (event.key === "Escape") { $("#selection-menu").hidden = true; $("#canvas-context-menu").hidden = true; }
   });
   window.addEventListener("resize", () => { if ($("#canvas-view").classList.contains("is-active")) { renderEdges(); renderCrossLinks(); } });
 }
@@ -1464,6 +1487,9 @@ let activeFormattingPicker=null;
 function showFormattingPicker(menu,trigger,onOutside){
  if(activeFormattingPicker)activeFormattingPicker.close(true);
  menu.hidden=false;
+ const triggerRect=trigger.getBoundingClientRect(),menuRect=menu.getBoundingClientRect();
+ menu.style.left=Math.max(8,Math.min(innerWidth-menuRect.width-8,triggerRect.left))+'px';
+ menu.style.top=(triggerRect.bottom+8+menuRect.height<innerHeight?triggerRect.bottom+8:triggerRect.top-menuRect.height-8)+'px';
  activeFormattingPicker={menu,trigger,close:(commit=true)=>{
   menu.hidden=true;
   if(activeFormattingPicker?.menu===menu)activeFormattingPicker=null;
@@ -1482,9 +1508,11 @@ function installFormatting(node,editor,note){
  const restore=()=>{editor.focus();const sel=window.getSelection();if(savedRange){sel.removeAllRanges();sel.addRange(savedRange);}return sel;};
  const colors=['#e34b55','#3b82f6','#48a986','#e5a94e','#b18ae8'];
  const picker=(klass,initial,apply,finish)=>{
-  const menu=document.createElement('div');menu.className=klass;menu.hidden=true;
-  colors.forEach(color=>{const choice=document.createElement('button');choice.type='button';choice.style.setProperty('--picker-color',color);choice.setAttribute('aria-label',color+' 선택');choice.onpointerdown=event=>event.preventDefault();choice.onclick=()=>{apply(color);finish();};menu.append(choice);});
-  const spectrum=document.createElement('input');spectrum.type='color';spectrum.value=initial;spectrum.setAttribute('aria-label','스펙트럼에서 색 선택');spectrum.oninput=()=>apply(spectrum.value);menu.append(spectrum);return menu;
+  const menu=document.createElement('div');menu.className=klass+' floating-color-menu';menu.hidden=true;
+  const quick=document.createElement('div');quick.className='quick-color-row';
+  colors.forEach(color=>{const choice=document.createElement('button');choice.type='button';choice.style.setProperty('--picker-color',color);choice.setAttribute('aria-label',color+' 선택');choice.onpointerdown=event=>event.preventDefault();choice.onclick=()=>{apply(color);finish();};quick.append(choice);});
+  const spectrumRow=document.createElement('label');spectrumRow.className='spectrum-color-row';spectrumRow.innerHTML='<span>직접 선택</span>';
+  const spectrum=document.createElement('input');spectrum.type='color';spectrum.value=initial;spectrum.setAttribute('aria-label','스펙트럼에서 색 선택');spectrum.oninput=()=>apply(spectrum.value);spectrumRow.append(spectrum);menu.append(quick,spectrumRow);document.body.append(menu);return menu;
  };
  [['B','굵게','bold'],['U','밑줄','underline']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.onpointerdown=event=>{event.preventDefault();remember();};button.onclick=()=>{const sel=restore();if(sel.rangeCount)document.execCommand(command,false,null);persist();};toolbar.append(button);});
  const high=document.createElement('button');high.type='button';high.className='format-icon format-highlight';high.textContent='🖍';high.title='형광펜';high.style.setProperty('--tool-color',note.highlightColor||'#f6dc62');
@@ -1529,12 +1557,19 @@ function settleNodes(){
  };layoutFrame=requestAnimationFrame(tick);
 }
 function installCanvasPan(){
- const stage=$('#canvas-stage');stage.addEventListener('pointerdown',e=>{
+ const stage=$('#canvas-stage');
+ stage.addEventListener('contextmenu',event=>{
+  if(event.target.closest('.canvas-node,button,input'))return;
+  event.preventDefault();const rect=stage.getBoundingClientRect();
+  canvasContextPoint={x:(event.clientX-rect.left-canvasPan.x)/canvasZoom,y:(event.clientY-rect.top-canvasPan.y)/canvasZoom};
+  const menu=$('#canvas-context-menu');menu.style.left=Math.max(8,Math.min(innerWidth-210,event.clientX))+'px';menu.style.top=Math.max(8,Math.min(innerHeight-70,event.clientY))+'px';menu.hidden=false;
+ });
+ stage.addEventListener('pointerdown',e=>{
   if(e.button!==0||e.target.closest('.canvas-node,button,input'))return;e.preventDefault();stage.setPointerCapture(e.pointerId);stage.classList.add('panning');
   const start={x:e.clientX,y:e.clientY,px:canvasPan.x,py:canvasPan.y};let target={...canvasPan},velocity={x:0,y:0},last={...canvasPan,time:performance.now()},frame=0;
-  const paint=()=>{canvasPan.x+=(target.x-canvasPan.x)*.42;canvasPan.y+=(target.y-canvasPan.y)*.42;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();if(Math.abs(target.x-canvasPan.x)+Math.abs(target.y-canvasPan.y)>.2)frame=requestAnimationFrame(paint);else frame=0;};
+  const paint=()=>{canvasPan.x+=(target.x-canvasPan.x)*.42;canvasPan.y+=(target.y-canvasPan.y)*.42;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();renderCrossLinks();if(Math.abs(target.x-canvasPan.x)+Math.abs(target.y-canvasPan.y)>.2)frame=requestAnimationFrame(paint);else frame=0;};
   const move=ev=>{const now=performance.now();target={x:start.px+ev.clientX-start.x,y:start.py+ev.clientY-start.y};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
-  const glide=()=>{velocity.x*=.91;velocity.y*=.91;canvasPan.x+=velocity.x;canvasPan.y+=velocity.y;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)requestAnimationFrame(glide);else saveCanvasView();};
+  const glide=()=>{velocity.x*=.91;velocity.y*=.91;canvasPan.x+=velocity.x;canvasPan.y+=velocity.y;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();renderCrossLinks();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)requestAnimationFrame(glide);else saveCanvasView();};
   const up=()=>{stage.classList.remove('panning');stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',up);stage.removeEventListener('pointercancel',up);if(frame)cancelAnimationFrame(frame);requestAnimationFrame(glide);};stage.addEventListener('pointermove',move);stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
  });
 }
@@ -1598,4 +1633,4 @@ async function loadPreparedRecord(){
 recordTab=RECORD_TABS.includes(state.activeCanvasTab)?state.activeCanvasTab:'1학년 1학기';const initialCanvasView=state.canvasViews?.[recordTab];if(initialCanvasView){canvasPan={...initialCanvasView.pan};canvasZoom=initialCanvasView.zoom||1;}
 bindEvents();installCanvasPan();installRecordTabs();renderAll();routeTo(location.hash==="#graph"?"graph":"canvas");loadPreparedRecord();
 
-function fitCanvas(){const nodes=$$('#node-layer .canvas-node');if(!nodes.length){canvasPan={x:0,y:0};canvasZoom=1;renderCanvas();return;}const bounds=nodes.map(n=>({x:parseFloat(n.style.left),y:parseFloat(n.style.top),w:n.offsetWidth,h:n.offsetHeight}));const left=Math.min(...bounds.map(n=>n.x)),top=Math.min(...bounds.map(n=>n.y)),right=Math.max(...bounds.map(n=>n.x+n.w)),bottom=Math.max(...bounds.map(n=>n.y+n.h));const stage=$('#canvas-stage');canvasZoom=Math.min(1.5,Math.max(.2,Math.min((stage.clientWidth-70)/(right-left),(stage.clientHeight-70)/(bottom-top))));canvasPan={x:(stage.clientWidth-(right-left)*canvasZoom)/2-left*canvasZoom,y:(stage.clientHeight-(bottom-top)*canvasZoom)/2-top*canvasZoom};renderCanvas();}
+function fitCanvas(){const nodes=$$('#node-layer .canvas-node');if(!nodes.length){canvasPan={x:0,y:0};canvasZoom=1;renderCanvas();return;}const bounds=nodes.map(n=>({x:parseFloat(n.style.left),y:parseFloat(n.style.top),w:n.offsetWidth,h:n.offsetHeight}));const left=Math.min(...bounds.map(n=>n.x)),top=Math.min(...bounds.map(n=>n.y)),right=Math.max(...bounds.map(n=>n.x+n.w)),bottom=Math.max(...bounds.map(n=>n.y+n.h));const stage=$('#canvas-stage');canvasZoom=Math.min(1.5,Math.max(.12,Math.min((stage.clientWidth-70)/(right-left),(stage.clientHeight-70)/(bottom-top))));canvasPan={x:(stage.clientWidth-(right-left)*canvasZoom)/2-left*canvasZoom,y:(stage.clientHeight-(bottom-top)*canvasZoom)/2-top*canvasZoom};renderCanvas();}

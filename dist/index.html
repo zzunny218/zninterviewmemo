@@ -102,7 +102,6 @@
           <div class="canvas-toolbar">
             <div class="canvas-primary-actions">
               <button id="canvas-upload" class="secondary-button" type="button">PDF</button>
-              <button id="canvas-new-note" class="primary-button" type="button">＋ 메모</button>
               <button id="ai-link-notes" class="secondary-button" type="button" disabled>AI 연결 · 준비 중</button>
               <button id="ai-analyze-record" class="secondary-button" type="button" disabled>AI 분석 · 준비 중</button>
             </div>
@@ -169,6 +168,10 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div id="canvas-context-menu" class="selection-menu canvas-context-menu" role="menu" hidden>
+      <button id="canvas-context-new-note" role="menuitem" type="button"><span class="menu-icon">＋</span><strong>메모 생성</strong></button>
     </div>
 
     <div id="selection-menu" class="selection-menu" role="menu" hidden>
