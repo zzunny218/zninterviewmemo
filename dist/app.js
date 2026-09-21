@@ -1168,9 +1168,29 @@ function fitAllGraph() {
   allGraphPan = {x:(stage.clientWidth - 1700 * allGraphZoom) / 2,y:(stage.clientHeight - 1100 * allGraphZoom) / 2};
   paintAllGraph();
 }
+function updateAllGraphFocus(noteId) {
+  const connected = new Set([noteId]);
+  const lines = $$('#all-graph-edges line');
+
+  // 선택한 노드에 직접 닿은 실제 링크와 유사 링크를 모두 연결 관계로 본다.
+  lines.forEach(line => {
+    const a = line.dataset.noteA;
+    const b = line.dataset.noteB;
+    const isConnected = a === noteId || b === noteId;
+    line.classList.toggle('selection-dimmed', !isConnected);
+    line.classList.toggle('selection-connected', isConnected);
+    if (isConnected) connected.add(a === noteId ? b : a);
+  });
+
+  $$('#all-graph-nodes .all-graph-item').forEach(node => {
+    node.classList.toggle('selection-dimmed', !connected.has(node.dataset.noteId));
+    node.classList.toggle('selection-connected', connected.has(node.dataset.noteId) && node.dataset.noteId !== noteId);
+  });
+}
 function showAllGraphNote(note) {
   selectedAllGraphNoteId = note.id;
   $$('#all-graph-nodes .all-graph-item').forEach(node => node.classList.toggle('selected',node.dataset.noteId === note.id));
+  updateAllGraphFocus(note.id);
   const anchors = (note.anchors || []).map(anchor => {const block = state.blocks.find(item => item.id === anchor.blockId);return '<li>' + escapeHtml([block?.grade,block?.subject,anchor.quote].filter(Boolean).join(' · ')) + '</li>';}).join('');
   const links = (note.links || []).map(id => state.notes.find(item => item.id === id)).filter(Boolean);
   const panel = $("#all-graph-detail");
@@ -1190,7 +1210,7 @@ function renderAllGraph() {
     item.style.left=(p.x-42)+'px';item.style.top=(p.y-42)+'px';item.style.setProperty('--graph-color',/^#[0-9a-fA-F]{6}$/.test(note.color||'')?note.color:'#5865f2');
     item.innerHTML='<span class="all-graph-circle"><span>'+escapeHtml(noteCanvas(note))+'</span><span>'+escapeHtml(subject)+'</span></span><span class="all-graph-title">'+escapeHtml(note.title)+'</span>';
     item.onclick=()=>{showAllGraphNote(note);focusAllGraphNode(note.id);};nodes.append(item);
-    (note.links||[]).forEach(id=>{if(!known.has(id))return;const key=[note.id,id].sort().join('::');if(drawn.has(key))return;drawn.add(key);const q=positions.get(id),line=document.createElementNS('http://www.w3.org/2000/svg','line');line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.append(line);});
+    (note.links||[]).forEach(id=>{if(!known.has(id))return;const key=[note.id,id].sort().join('::');if(drawn.has(key))return;drawn.add(key);const q=positions.get(id),line=document.createElementNS('http://www.w3.org/2000/svg','line');line.dataset.noteA=note.id;line.dataset.noteB=id;line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.append(line);});
   });
   // 유사 관계는 그래프에만 그리며 메모의 실제 연결 목록을 바꾸지 않는다.
   const terms=new Map(notes.map(note=>[note.id,graphTerms(note)])),suggestions=[];
@@ -1202,7 +1222,7 @@ function renderAllGraph() {
     if((neighbors.get(a)||0)>=3||(neighbors.get(b)||0)>=3)return;
     neighbors.set(a,(neighbors.get(a)||0)+1);neighbors.set(b,(neighbors.get(b)||0)+1);
     const p=positions.get(a),q=positions.get(b),line=document.createElementNS('http://www.w3.org/2000/svg','line');
-    line.classList.add('similarity-link');line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.prepend(line);
+    line.classList.add('similarity-link');line.dataset.noteA=a;line.dataset.noteB=b;line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.prepend(line);
   });
   if(notes.length)showAllGraphNote(notes.find(note=>note.id===selectedAllGraphNoteId)||notes[0]);
   else $("#all-graph-detail").innerHTML='<p>메모를 선택하세요.</p>';

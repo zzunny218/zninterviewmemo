@@ -515,3 +515,11 @@ mark.source-highlight.linked,.canvas-source-document mark.source-highlight.linke
 
 /* Keep both text and highlighter palettes in the same vertical layout. */
 .floating-color-menu{display:block!important}.floating-color-menu .spectrum-color-row{width:100%;box-sizing:border-box}
+
+/* 선택한 전체 그래프 노드와 직접 연결된 관계만 선명하게 유지한다. */
+.all-graph-item,#all-graph-edges line{transition:opacity .2s ease,filter .2s ease,stroke .2s ease}
+.all-graph-item.selection-dimmed{opacity:.13;filter:brightness(.42) saturate(.45)}
+#all-graph-edges line.selection-dimmed{opacity:.08}
+#all-graph-edges line.selection-connected{opacity:1;stroke:rgba(255,255,255,.72)}
+#all-graph-edges line.similarity-link.selection-connected{stroke:rgba(170,181,240,.72)}
+.all-graph-item.selection-connected{opacity:1;filter:none}
