@@ -588,3 +588,8 @@ body:not([data-route="canvas"]) .rail-submenu{display:none}
   .record-subject-card{padding:12px}
   .record-card-entry p{font-size:13px;line-height:1.72}
 }
+
+/* 색상 팔레트의 실제 열림 상태와 화살표 방향을 버튼 상태에 맞춘다. */
+.floating-color-menu[hidden]{display:none!important}
+.format-color-chevron svg{transition:transform .16s ease}
+.format-color-chevron[aria-expanded="true"] svg{transform:rotate(180deg)}

@@ -1685,15 +1685,20 @@ function syncFormatColor(kind,color){
 }
 let activeFormattingPicker=null;
 function showFormattingPicker(menu,trigger,onOutside){
+ // 다른 팔레트가 열려 있으면 먼저 현재 색을 반영하고 닫는다.
  if(activeFormattingPicker)activeFormattingPicker.close(true);
  menu.hidden=false;
+ trigger.setAttribute('aria-expanded','true');
  const anchor=trigger.closest('.format-split')||trigger;
  const triggerRect=anchor.getBoundingClientRect(),menuRect=menu.getBoundingClientRect();
  menu.style.left=Math.max(8,Math.min(innerWidth-menuRect.width-8,triggerRect.left))+'px';
  // 팔레트는 메모 확대·이동과 무관하게 버튼 바로 아래에 고정한다.
  menu.style.top=Math.min(innerHeight-menuRect.height-8,triggerRect.bottom+6)+'px';
  activeFormattingPicker={menu,trigger,close:(commit=true)=>{
+  // 이미 닫힌 팔레트에는 종료 동작을 중복 적용하지 않는다.
+  if(menu.hidden)return;
   menu.hidden=true;
+  trigger.setAttribute('aria-expanded','false');
   if(activeFormattingPicker?.menu===menu)activeFormattingPicker=null;
   if(commit)onOutside?.();
  }};
@@ -1717,7 +1722,7 @@ function installFormatting(node,editor,note){
   const spectrum=document.createElement('input');spectrum.type='color';spectrum.value=initial;spectrum.setAttribute('aria-label','스펙트럼에서 색 선택');spectrum.oninput=()=>apply(spectrum.value);spectrumRow.append(spectrum);menu.append(quick,spectrumRow);document.body.append(menu);return menu;
  };
  [['B','굵게','bold'],['U','밑줄','underline']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.onpointerdown=event=>{event.preventDefault();remember();};button.onclick=()=>{const sel=restore();if(sel.rangeCount)document.execCommand(command,false,null);persist();};toolbar.append(button);});
- const chevron=()=>{const button=document.createElement('button');button.type='button';button.className='format-color-chevron';button.innerHTML='<svg viewBox="0 0 12 8" aria-hidden="true"><path d="m2 2 4 4 4-4"/></svg>';return button;};
+ const chevron=()=>{const button=document.createElement('button');button.type='button';button.className='format-color-chevron';button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');button.innerHTML='<svg viewBox="0 0 12 8" aria-hidden="true"><path d="m2 2 4 4 4-4"/></svg>';return button;};
  const highGroup=document.createElement('span');highGroup.className='format-split';
  const high=document.createElement('button');high.type='button';high.className='format-icon format-highlight';high.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 7-7 4 4-7 7H7zM13 9l4 4M5 20h10"/></svg>';high.title='형광펜';high.style.setProperty('--tool-color',formatColor('highlight'));
  const highArrow=chevron();highArrow.title='형광펜 색 선택';highArrow.setAttribute('aria-label','형광펜 색 선택');high.dataset.formatColor='highlight';highArrow.dataset.formatColor='highlight';
@@ -1841,3 +1846,4 @@ migrateWorkspaceState();saveState();recordTab=RECORD_TABS.includes(state.activeC
 bindEvents();installCanvasPan();installRecordTabs();renderAll();routeTo(location.hash==="#graph"?"graph":"canvas");loadPreparedRecord();
 
 function fitCanvas(){const nodes=$$('#node-layer .canvas-node');if(!nodes.length){canvasPan={x:0,y:0};canvasZoom=1;renderCanvas();return;}const bounds=nodes.map(n=>({x:parseFloat(n.style.left),y:parseFloat(n.style.top),w:n.offsetWidth,h:n.offsetHeight}));const left=Math.min(...bounds.map(n=>n.x)),top=Math.min(...bounds.map(n=>n.y)),right=Math.max(...bounds.map(n=>n.x+n.w)),bottom=Math.max(...bounds.map(n=>n.y+n.h));const stage=$('#canvas-stage');canvasZoom=Math.min(1.5,Math.max(.12,Math.min((stage.clientWidth-70)/(right-left),(stage.clientHeight-70)/(bottom-top))));canvasPan={x:(stage.clientWidth-(right-left)*canvasZoom)/2-left*canvasZoom,y:(stage.clientHeight-(bottom-top)*canvasZoom)/2-top*canvasZoom};renderCanvas();}
+
