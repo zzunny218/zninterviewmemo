@@ -593,3 +593,11 @@ body:not([data-route="canvas"]) .rail-submenu{display:none}
 .floating-color-menu[hidden]{display:none!important}
 .format-color-chevron svg{transition:transform .16s ease}
 .format-color-chevron[aria-expanded="true"] svg{transform:rotate(180deg)}
+
+
+/* 최근 선택한 스펙트럼 색과 그래프·캔버스의 네이티브 드래그 동작 */
+.recent-color-section{display:grid;gap:7px;margin-top:10px;padding-top:9px;border-top:1px solid #45474f;color:#d5d8de;font-size:12px}
+.recent-color-row{display:grid;grid-template-columns:repeat(5,28px);gap:7px}
+.floating-color-menu .recent-color-row button{width:28px!important;height:28px!important;padding:0!important;border:2px solid rgba(255,255,255,.75)!important;border-radius:5px!important;background:var(--picker-color)!important;cursor:pointer}
+.canvas-stage,.all-graph-stage,.all-graph-world,#all-graph-nodes,.all-graph-item,.all-graph-circle{user-select:none;-webkit-user-select:none;-webkit-user-drag:none}
+.canvas-stage img,.canvas-stage svg,.all-graph-stage img,.all-graph-stage svg{user-select:none;-webkit-user-select:none;-webkit-user-drag:none}

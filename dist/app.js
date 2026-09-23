@@ -143,7 +143,7 @@ const CANVAS_MIN_ZOOM = .15;
 const CANVAS_MAX_ZOOM = 2;
 const CATEGORY_TYPES = ["전공 지식","논리·사고력","인성","협동","리더십","진로 탐색","가치관","태도","캐릭터","성장","질문","자유 메모"];
 const CATEGORY_MIGRATION = {"탐구":"논리·사고력","협업":"협동","진로":"진로 탐색","활동":"태도","면접 질문":"질문"};
-const VISUAL_DEFAULTS = {graphNodeSize:84,graphLinkWidth:2,canvasLinkWidth:2,canvasLinkOpacity:.38,textColor:"#e34b55",highlightColor:"#f6dc62"};
+const VISUAL_DEFAULTS = {graphNodeSize:84,graphLinkWidth:2,canvasLinkWidth:2,canvasLinkOpacity:.38,textColor:"#e34b55",highlightColor:"#f6dc62",recentColors:[]};
 
 function normalizeNoteCategory(value) {
   const migrated = CATEGORY_MIGRATION[value] || value;
@@ -165,6 +165,12 @@ function migrateWorkspaceState() {
     state.notes.forEach((note)=>{if(demoIds.has(note.id))note.links=note.links.filter((id)=>!demoIds.has(id));});
     state.legacyDemoLinksRemoved=true;
   }
+  // 예전 단방향 링크도 양쪽 메모에서 동일하게 확인되도록 보완한다.
+  const notesById=new Map(state.notes.map((note)=>[note.id,note]));
+  state.notes.forEach((note)=>note.links.forEach((id)=>{
+    const other=notesById.get(id);
+    if(other&&!other.links.includes(note.id))other.links.push(note.id);
+  }));
   state.canvasViews ||= {};
   if (!state.canvasViews.all) {
     const legacy = state.canvasViews[state.activeCanvasTab] || Object.values(state.canvasViews)[0];
@@ -172,6 +178,8 @@ function migrateWorkspaceState() {
   }
   state.canvasPanels = {source: state.canvasPanels?.source !== false, search: state.canvasPanels?.search !== false};
   state.visualSettings = {...VISUAL_DEFAULTS,...(state.visualSettings || {})};
+  state.visualSettings.recentColors=[...new Set(Array.isArray(state.visualSettings.recentColors)?state.visualSettings.recentColors:[])]
+    .filter((color)=>/^#[0-9a-f]{6}$/i.test(color)).slice(0,5);
   state.notes.forEach(note => {
     note.textColor = state.visualSettings.textColor;
     note.highlightColor = state.visualSettings.highlightColor;
@@ -222,7 +230,13 @@ function routeTo(route) {
   history.replaceState(null, "", `#${route}`);
   document.body.dataset.route = route;
   if (route === "canvas") renderCanvas();
-  if (route === "graph") renderAllGraph();
+  if (route === "graph") {
+    // 그래프를 열 때마다 최신 메모·카테고리·연결 상태로 다시 계산한다.
+    migrateWorkspaceState();
+    selectedAllGraphNoteId=null;
+    renderAllGraph();
+  }
+
   if (route === "persona") renderPersonas();
   if (route === "interview") renderInterview();
 }
@@ -687,7 +701,7 @@ function installStyleMenu(node,note){
     if(!icon&&!color)return;
     saveState();renderCanvas();
   };
-  $(".style-spectrum",popover).onchange=(event)=>{note.color=event.target.value;saveState();renderCanvas();};
+  $(".style-spectrum",popover).onchange=(event)=>{note.color=event.target.value;rememberRecentColor(event.target.value);saveState();renderCanvas();};
 }
 
 function noteContext(note) {
@@ -696,13 +710,14 @@ function noteContext(note) {
 }
 
 function noteCanvas(note){
- if(RECORD_TABS.includes(note.canvasTab))return note.canvasTab;
- const anchor=(note.anchors||[])[0];const block=state.blocks.find(item=>item.id===anchor?.blockId);
- if(!block)return '1학년 1학기';
+ // 원문에 연결되지 않은 자유 메모에는 생성 당시 학기 정보를 표시하지 않는다.
+ const anchor=(note.anchors||[])[0];
+ const block=state.blocks.find(item=>item.id===anchor?.blockId);
+ if(!block)return '';
  if(/창의|창체/.test(block.section))return '창체';
  if(/출결|수상|자격|학폭|학교폭력|봉사/.test(block.section))return '기록 묶음';
  const tab=block.grade+' '+normalizeSemester(block.semester);
- return RECORD_TABS.includes(tab)?tab:'1학년 1학기';
+ return RECORD_TABS.includes(tab)?tab:'';
 }
 function saveCanvasView(){state.canvasViews||={};state.canvasViews.all={pan:{...canvasPan},zoom:canvasZoom};saveState();}
 function switchCanvas(tab){
@@ -857,9 +872,17 @@ function cancelPendingLink(message='링크 연결을 취소했어요.'){
 function beginPendingLink(noteId){
  linkingFromNoteId=noteId;$("#note-context-menu").hidden=true;$("#canvas-stage")?.classList.add('linking-mode');toast('연결할 메모를 누르거나 생기부 문장을 드래그하세요.');
 }
+function linkNotesBidirectionally(source,target){
+ if(!source||!target||source.id===target.id)return false;
+ source.links||=[];target.links||=[];let changed=false;
+ if(!source.links.includes(target.id)){source.links.push(target.id);changed=true;}
+ if(!target.links.includes(source.id)){target.links.push(source.id);changed=true;}
+ return changed;
+}
 function connectPendingNote(targetId){
- const source=state.notes.find((note)=>note.id===linkingFromNoteId);if(!source||source.id===targetId)return;
- source.links||=[];if(!source.links.includes(targetId))source.links.push(targetId);
+ const source=state.notes.find((note)=>note.id===linkingFromNoteId),target=state.notes.find((note)=>note.id===targetId);
+ if(!source||!target||source.id===target.id)return;
+ linkNotesBidirectionally(source,target);
  linkingFromNoteId=null;$("#canvas-stage")?.classList.remove('linking-mode');saveState();renderCanvas();toast('두 메모를 연결했어요.');
 }
 function connectPendingAnchor(anchor){
@@ -932,14 +955,15 @@ function applyCanvasPanels(){
 function showNoteRelations(node,note){
  const existing=node.querySelector('.note-relations');if(existing){existing.remove();return;}
  const panel=document.createElement('div');panel.className='note-relations';
- const incoming=state.notes.filter(other=>(other.links||[]).includes(note.id));
- const outgoing=(note.links||[]).map(id=>state.notes.find(other=>other.id===id)).filter(Boolean);
+ const relatedIds=new Set(note.links||[]);
+ state.notes.forEach((other)=>{if((other.links||[]).includes(note.id))relatedIds.add(other.id);});
+ const related=[...relatedIds].map((id)=>state.notes.find((other)=>other.id===id)).filter(Boolean);
  panel.innerHTML='<div class="relation-head"><strong>메모 연결</strong><button type="button" class="relation-close" aria-label="닫기">×</button></div><div class="relation-list"></div><button type="button" class="relation-add">＋ 메모 연결</button>';
  const list=panel.querySelector('.relation-list');
- [...outgoing.map(other=>({other,label:'↗'})),...incoming.map(other=>({other,label:'↩'}))].forEach(({other,label})=>{const button=document.createElement('button');button.type='button';button.textContent=label+' '+other.title+' · '+noteCanvas(other);button.onclick=()=>jumpToNote(other.id);list.append(button);});
+ related.forEach((other)=>{const button=document.createElement('button');button.type='button';button.textContent=['↔ '+other.title,noteCanvas(other)].filter(Boolean).join(' · ');button.onclick=()=>jumpToNote(other.id);list.append(button);});
  if(!list.children.length)list.textContent='연결된 메모 없음';
  panel.querySelector('.relation-close').onclick=()=>panel.remove();
- panel.querySelector('.relation-add').onclick=()=>{list.innerHTML='';state.notes.filter(other=>other.id!==note.id&&!(note.links||[]).includes(other.id)).forEach(other=>{const button=document.createElement('button');button.type='button';button.textContent=other.title+' · '+noteCanvas(other);button.onclick=()=>{note.links||=[];note.links.push(other.id);saveState();renderCanvas();};list.append(button);});};
+ panel.querySelector('.relation-add').onclick=()=>{list.innerHTML='';state.notes.filter((other)=>other.id!==note.id&&!relatedIds.has(other.id)).forEach((other)=>{const button=document.createElement('button');button.type='button';button.textContent=[other.title,noteCanvas(other)].filter(Boolean).join(' · ');button.onclick=()=>{linkNotesBidirectionally(note,other);saveState();renderCanvas();};list.append(button);});};
  node.append(panel);
 }
 
@@ -1057,7 +1081,8 @@ function enableConnectorDrag(handle, sourceId) {
       const targetId = target?.dataset.noteId;
       if (targetId && targetId !== sourceId) {
         const sourceNote = state.notes.find((note) => note.id === sourceId);
-        if (!sourceNote.links.includes(targetId)) sourceNote.links.push(targetId);
+        const targetNote = state.notes.find((note) => note.id === targetId);
+        linkNotesBidirectionally(sourceNote,targetNote);
         saveState();
         toast("두 메모를 연결했어요.");
       }
@@ -1223,6 +1248,12 @@ function updateAllGraphFocus(noteId) {
     node.classList.toggle('selection-connected', connected.has(node.dataset.noteId) && node.dataset.noteId !== noteId);
   });
 }
+function clearAllGraphSelection(){
+  selectedAllGraphNoteId=null;
+  $$('#all-graph-nodes .all-graph-item').forEach((node)=>node.classList.remove('selected','selection-dimmed','selection-connected'));
+  $$('#all-graph-edges line').forEach((line)=>line.classList.remove('selection-dimmed','selection-connected'));
+  const panel=$("#all-graph-detail");if(panel)panel.innerHTML='<p>메모를 선택하세요.</p>';
+}
 function showAllGraphNote(note) {
   selectedAllGraphNoteId = note.id;
   $$('#all-graph-nodes .all-graph-item').forEach(node => node.classList.toggle('selected',node.dataset.noteId === note.id));
@@ -1230,7 +1261,8 @@ function showAllGraphNote(note) {
   const anchors = (note.anchors || []).map(anchor => {const block = state.blocks.find(item => item.id === anchor.blockId);return '<li>' + escapeHtml([block?.grade,block?.subject,anchor.quote].filter(Boolean).join(' · ')) + '</li>';}).join('');
   const links = (note.links || []).map(id => state.notes.find(item => item.id === id)).filter(Boolean);
   const panel = $("#all-graph-detail");
-  panel.innerHTML = '<span class="graph-detail-meta">' + escapeHtml(noteCanvas(note)) + ' · ' + escapeHtml(noteContext(note).subjects.join(', ') || note.category) + '</span><h2>' + escapeHtml(note.title) + '</h2><div class="graph-detail-body">' + safeNoteHtml(note.bodyHtml || escapeHtml(note.body || '')) + '</div>' + (anchors ? '<h3>근거</h3><ul>' + anchors + '</ul>' : '') + (links.length ? '<h3>연결</h3><div class="graph-detail-links"></div>' : '') + '<button type="button" class="primary-button graph-open-note">캔버스에서 열기</button>';
+  const meta=[noteCanvas(note),noteContext(note).subjects.join(', '),normalizeNoteCategory(note.category)].filter(Boolean).join(' · ');
+  panel.innerHTML = '<span class="graph-detail-meta">' + escapeHtml(meta) + '</span><h2>' + escapeHtml(note.title) + '</h2><div class="graph-detail-body">' + safeNoteHtml(note.bodyHtml || escapeHtml(note.body || '')) + '</div>' + (anchors ? '<h3>근거</h3><ul>' + anchors + '</ul>' : '') + (links.length ? '<h3>연결</h3><div class="graph-detail-links"></div>' : '') + '<button type="button" class="primary-button graph-open-note">캔버스에서 열기</button>';
   const linkBox = panel.querySelector('.graph-detail-links');
   links.forEach(other => {const button = document.createElement('button');button.type='button';button.textContent=other.title;button.onclick=()=>{showAllGraphNote(other);focusAllGraphNode(other.id);};linkBox?.append(button);});
   panel.querySelector('.graph-open-note').onclick=()=>{routeTo('canvas');jumpToNote(note.id);};
@@ -1241,10 +1273,11 @@ function renderAllGraph() {
   $("#all-graph-count").textContent=notes.length+'개 메모';
   const positions=allGraphPositions(notes), known=new Set(notes.map(note=>note.id)), drawn=new Set();
   notes.forEach(note=>{
-    const p=positions.get(note.id), anchor=(note.anchors||[])[0], block=state.blocks.find(item=>item.id===anchor?.blockId), subject=block?.subject||'자유';
+    const p=positions.get(note.id),anchor=(note.anchors||[])[0],block=state.blocks.find((item)=>item.id===anchor?.blockId),category=normalizeNoteCategory(note.category);
+    const labels=[noteCanvas(note),block?.subject,category].filter(Boolean);
     const item=document.createElement('button');item.type='button';item.className='all-graph-item';item.dataset.noteId=note.id;
     const half=state.visualSettings.graphNodeSize/2;item.style.left=(p.x-half)+'px';item.style.top=(p.y-half)+'px';item.style.setProperty('--graph-color',/^#[0-9a-fA-F]{6}$/.test(note.color||'')?note.color:'#5865f2');
-    item.innerHTML='<span class="all-graph-circle"><span>'+escapeHtml(noteCanvas(note))+'</span><span>'+escapeHtml(subject)+'</span></span><span class="all-graph-title">'+escapeHtml(note.title)+'</span>';
+    item.innerHTML='<span class="all-graph-circle">'+labels.map((label)=>'<span>'+escapeHtml(label)+'</span>').join('')+'</span><span class="all-graph-title">'+escapeHtml(note.title)+'</span>';
     item.onclick=()=>{showAllGraphNote(note);focusAllGraphNode(note.id);};nodes.append(item);
     (note.links||[]).forEach(id=>{if(!known.has(id))return;const key=[note.id,id].sort().join('::');if(drawn.has(key))return;drawn.add(key);const q=positions.get(id),line=document.createElementNS('http://www.w3.org/2000/svg','line');line.dataset.noteA=note.id;line.dataset.noteB=id;line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.append(line);});
   });
@@ -1260,21 +1293,23 @@ function renderAllGraph() {
     const p=positions.get(a),q=positions.get(b),line=document.createElementNS('http://www.w3.org/2000/svg','line');
     line.classList.add('similarity-link');line.dataset.noteA=a;line.dataset.noteB=b;line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',q.x);line.setAttribute('y2',q.y);edges.prepend(line);
   });
-  if(notes.length)showAllGraphNote(notes.find(note=>note.id===selectedAllGraphNoteId)||notes[0]);
-  else $("#all-graph-detail").innerHTML='<p>메모를 선택하세요.</p>';
+  const selected=notes.find((note)=>note.id===selectedAllGraphNoteId);
+  if(selected)showAllGraphNote(selected);else clearAllGraphSelection();
   requestAnimationFrame(fitAllGraph);
 }
 function installAllGraphPan() {
   const stage = $("#all-graph-stage");
+  stage.addEventListener('dragstart',(event)=>event.preventDefault());
   stage.addEventListener('pointerdown',event=>{
     if(event.button!==0||event.target.closest('.all-graph-item'))return;
+    event.preventDefault();
     if(allGraphAnimationFrame){cancelAnimationFrame(allGraphAnimationFrame);allGraphAnimationFrame=0;}
     stage.setPointerCapture(event.pointerId);stage.classList.add('panning');
-    const start={x:event.clientX,y:event.clientY,panX:allGraphPan.x,panY:allGraphPan.y,time:performance.now()};let target={...allGraphPan},velocity={x:0,y:0},last={...allGraphPan,time:start.time},frame=0;
+    const start={x:event.clientX,y:event.clientY,panX:allGraphPan.x,panY:allGraphPan.y,time:performance.now()};let target={...allGraphPan},velocity={x:0,y:0},last={...allGraphPan,time:start.time},frame=0,moved=false;
     const paint=()=>{allGraphPan.x+=(target.x-allGraphPan.x)*.42;allGraphPan.y+=(target.y-allGraphPan.y)*.42;paintAllGraph();if(Math.abs(target.x-allGraphPan.x)+Math.abs(target.y-allGraphPan.y)>.2)frame=requestAnimationFrame(paint);else frame=0;};
-    const move=e=>{const now=performance.now();target={x:start.panX+e.clientX-start.x,y:start.panY+e.clientY-start.y};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
+    const move=e=>{const now=performance.now();if(Math.hypot(e.clientX-start.x,e.clientY-start.y)>5)moved=true;target={x:start.panX+e.clientX-start.x,y:start.panY+e.clientY-start.y};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
     const glide=()=>{velocity.x*=.91;velocity.y*=.91;allGraphPan.x+=velocity.x;allGraphPan.y+=velocity.y;paintAllGraph();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)allGraphAnimationFrame=requestAnimationFrame(glide);else allGraphAnimationFrame=0;};
-    const up=()=>{stage.classList.remove('panning');stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',up);stage.removeEventListener('pointercancel',up);if(frame)cancelAnimationFrame(frame);allGraphAnimationFrame=requestAnimationFrame(glide);};
+    const up=()=>{stage.classList.remove('panning');stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',up);stage.removeEventListener('pointercancel',up);if(frame)cancelAnimationFrame(frame);if(!moved)clearAllGraphSelection();allGraphAnimationFrame=requestAnimationFrame(glide);};
     stage.addEventListener('pointermove',move);stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
   });
   stage.addEventListener('wheel',event=>{event.preventDefault();if(allGraphAnimationFrame){cancelAnimationFrame(allGraphAnimationFrame);allGraphAnimationFrame=0;}const rect=stage.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,next=Math.min(2.4,Math.max(.12,allGraphZoom*(event.deltaY<0?1.1:.9)));allGraphPan={x:x-(x-allGraphPan.x)*next/allGraphZoom,y:y-(y-allGraphPan.y)*next/allGraphZoom};allGraphZoom=next;paintAllGraph();},{passive:false});
@@ -1401,7 +1436,7 @@ async function runAi(action, button) {
   button.disabled = true; const original = button.textContent; button.textContent = "분석 중";
   try {
     const result = await requestAi(action), validSources = new Set(aiEvidenceSources().map((source) => source.sourceId));
-    if (action === "links") { let count = 0; (result.links || []).forEach((link) => { const from = state.notes.find((note) => note.id === link.fromNoteId), to = state.notes.find((note) => note.id === link.toNoteId); if (from && to && from !== to && (link.sourceIds || []).some((id) => validSources.has(id)) && !from.links.includes(to.id)) { from.links.push(to.id); count += 1; } }); saveState(); renderCanvas(); toast(count ? "근거가 있는 메모 연결 " + count + "개를 만들었어요." : "새로 연결할 만큼 뚜렷한 메모 관계가 없어요."); }
+    if (action === "links") { let count = 0; (result.links || []).forEach((link) => { const from = state.notes.find((note) => note.id === link.fromNoteId), to = state.notes.find((note) => note.id === link.toNoteId); if (from && to && from !== to && (link.sourceIds || []).some((id) => validSources.has(id)) && linkNotesBidirectionally(from,to)) { count += 1; } }); saveState(); renderCanvas(); toast(count ? "근거가 있는 메모 연결 " + count + "개를 만들었어요." : "새로 연결할 만큼 뚜렷한 메모 관계가 없어요."); }
     if (action === "analysis") { state.notes = state.notes.filter((note) => !note.aiGeneratedPersona); const themes = (result.themes || []).filter((theme) => theme.title && (theme.sourceIds || []).some((id) => validSources.has(id))).slice(0, 3); themes.forEach((theme, index) => state.notes.push({ id: uid("note"), title: theme.title, body: theme.description || "", category: "캐릭터", color: "#5865f2", tags: [], anchors: makeAiAnchors(theme.sourceIds.filter((id) => validSources.has(id))), links: [], x: 650 + index * 44, y: 130 + index * 58, collapsed: false, aiGeneratedPersona: true })); saveState(); renderAll(); renderCanvas(); toast(themes.length ? "근거가 연결된 캐릭터 " + themes.length + "개를 정리했어요." : "근거가 충분한 캐릭터를 찾지 못했어요."); }
     if (action === "questions") { const questions = (result.questions || []).filter((item) => item.question && (item.sourceIds || []).some((id) => validSources.has(id))).slice(0, 6); state.questions = questions.map((item) => ({ id: uid("q"), type: item.type || "탐구", question: item.question, noteIds: (item.noteIds || []).filter((id) => state.notes.some((note) => note.id === id)), sourceIds: item.sourceIds.filter((id) => validSources.has(id)), draft: "" })); state.activeQuestionId = state.questions[0]?.id || null; state.questionFilter = "전체"; saveState(); renderInterview(); toast(questions.length ? "근거가 연결된 예상 질문 " + questions.length + "개를 만들었어요." : "근거가 충분한 질문을 만들지 못했어요."); }
   } catch (error) { toast(error.message || "AI 분석을 다시 시도해 주세요."); } finally { button.disabled = false; button.textContent = original; }
@@ -1683,6 +1718,14 @@ function syncFormatColor(kind,color){
  else $$('#node-layer .node-body-edit span[style*="color"]').forEach(span=>span.style.color=color);
  saveState();
 }
+function rememberRecentColor(color){
+ if(!/^#[0-9a-f]{6}$/i.test(color))return;
+ const normalized=color.toLowerCase();
+ const recent=(state.visualSettings.recentColors||[]).filter((item)=>item.toLowerCase()!==normalized);
+ state.visualSettings.recentColors=[normalized,...recent].slice(0,5);
+ saveState();
+ $$('.floating-color-menu').forEach((menu)=>menu.refreshRecentColors?.());
+}
 let activeFormattingPicker=null;
 function showFormattingPicker(menu,trigger,onOutside){
  // 다른 팔레트가 열려 있으면 먼저 현재 색을 반영하고 닫는다.
@@ -1719,7 +1762,10 @@ function installFormatting(node,editor,note){
   const quick=document.createElement('div');quick.className='quick-color-row';
   colors.forEach(color=>{const choice=document.createElement('button');choice.type='button';choice.style.setProperty('--picker-color',color);choice.setAttribute('aria-label',color+' 선택');choice.onpointerdown=event=>event.preventDefault();choice.onclick=()=>{apply(color);finish();};quick.append(choice);});
   const spectrumRow=document.createElement('label');spectrumRow.className='spectrum-color-row';spectrumRow.innerHTML='<span>스펙트럼</span>';
-  const spectrum=document.createElement('input');spectrum.type='color';spectrum.value=initial;spectrum.setAttribute('aria-label','스펙트럼에서 색 선택');spectrum.oninput=()=>apply(spectrum.value);spectrumRow.append(spectrum);menu.append(quick,spectrumRow);document.body.append(menu);return menu;
+  const spectrum=document.createElement('input');spectrum.type='color';spectrum.value=initial;spectrum.setAttribute('aria-label','스펙트럼에서 색 선택');spectrum.oninput=()=>apply(spectrum.value);spectrum.onchange=()=>rememberRecentColor(spectrum.value);spectrumRow.append(spectrum);
+  const recent=document.createElement('section');recent.className='recent-color-section';recent.innerHTML='<span>최근 색</span><div class="recent-color-row"></div>';
+  menu.refreshRecentColors=()=>{const list=$('.recent-color-row',recent),saved=state.visualSettings.recentColors||[];recent.hidden=!saved.length;list.innerHTML='';saved.forEach((color)=>{const choice=document.createElement('button');choice.type='button';choice.style.setProperty('--picker-color',color);choice.setAttribute('aria-label','최근 색 '+color+' 선택');choice.onpointerdown=(event)=>event.preventDefault();choice.onclick=()=>{apply(color);finish();};list.append(choice);});};
+  menu.append(quick,spectrumRow,recent);menu.refreshRecentColors();document.body.append(menu);return menu;
  };
  [['B','굵게','bold'],['U','밑줄','underline']].forEach(([icon,label,command])=>{const button=document.createElement('button');button.type='button';button.className='format-icon format-'+command;button.textContent=icon;button.title=label;button.onpointerdown=event=>{event.preventDefault();remember();};button.onclick=()=>{const sel=restore();if(sel.rangeCount)document.execCommand(command,false,null);persist();};toolbar.append(button);});
  const chevron=()=>{const button=document.createElement('button');button.type='button';button.className='format-color-chevron';button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');button.innerHTML='<svg viewBox="0 0 12 8" aria-hidden="true"><path d="m2 2 4 4 4-4"/></svg>';return button;};
@@ -1770,6 +1816,7 @@ function settleNodes(){
 }
 function installCanvasPan(){
  const stage=$('#canvas-stage');
+ stage.addEventListener('dragstart',(event)=>event.preventDefault());
  stage.addEventListener('contextmenu',event=>{
   if(event.target.closest('.canvas-node,button,input'))return;
   event.preventDefault();const rect=stage.getBoundingClientRect();
