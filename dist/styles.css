@@ -609,3 +609,15 @@ body:not([data-route="canvas"]) .rail-submenu{display:none}
 .all-graph-detail{display:flex;flex-direction:column}
 #all-graph-detail-content{min-height:0}
 .graph-view-settings{margin-top:auto;padding-top:18px}
+
+/* 선택한 캔버스 메모의 생성 순서·생기부 근거 탐색 */
+.canvas-node.is-selected{z-index:22;box-shadow:0 0 0 2px rgba(255,255,255,.7),0 0 24px color-mix(in srgb,var(--note-color,#5865f2) 48%,transparent),0 16px 38px rgba(0,0,0,.42)!important}
+.canvas-note-navigation{position:absolute;inset:0;z-index:40;pointer-events:none}
+.canvas-note-navigation button{position:absolute;display:grid;place-items:center;width:36px;height:36px;padding:0;border:1px solid rgba(255,255,255,.2);border-radius:50%;background:#4e5058;color:#fff;box-shadow:0 7px 18px rgba(0,0,0,.42);cursor:pointer;pointer-events:auto;transition:transform .14s ease,background .14s ease,box-shadow .14s ease}
+.canvas-note-navigation button:hover,.canvas-note-navigation button:focus-visible{transform:scale(1.1);background:var(--note-color,#5865f2);box-shadow:0 0 0 3px rgba(255,255,255,.18),0 8px 22px rgba(0,0,0,.48);outline:none}
+.canvas-note-navigation svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.canvas-note-nav-left{left:-50px;top:50%;translate:0 -50%}
+.canvas-note-nav-right{right:-50px;top:50%;translate:0 -50%}
+.canvas-note-nav-up{top:-50px;left:50%;translate:-50% 0}
+.canvas-note-nav-down{bottom:-50px;left:50%;translate:-50% 0}
+@media(max-width:760px){.canvas-note-navigation button{width:40px;height:40px}.canvas-note-nav-left{left:-52px}.canvas-note-nav-right{right:-52px}.canvas-note-nav-up{top:-52px}.canvas-note-nav-down{bottom:-52px}}

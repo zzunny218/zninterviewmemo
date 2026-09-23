@@ -128,6 +128,8 @@ let canvasZoom = 1;
 let canvasPan = {x:0,y:0};
 let graphMode = false;
 let selectedGraphNoteId = null;
+let selectedCanvasNoteId = null;
+let selectedCanvasAnchorIndex = 0;
 let movingNodeId = null;
 let layoutFrame = null;
 let allGraphZoom = 1;
@@ -737,11 +739,68 @@ function graphCoordinates(items){
  }
  return positions;
 }
+function validNoteAnchors(note){
+ return (note?.anchors||[]).map((anchor,index)=>({anchor,index,block:state.blocks.find((block)=>block.id===anchor.blockId)})).filter((item)=>item.block);
+}
+function recordTabForBlock(block){
+ if(/창의|창체/.test(block?.section||''))return '창체';
+ if(/출결|수상|자격|학폭|학교폭력|봉사/.test(block?.section||''))return '기록 묶음';
+ const tab=(block?.grade||'')+' '+normalizeSemester(block?.semester);
+ return RECORD_TABS.includes(tab)?tab:recordTab;
+}
+function activateNoteAnchor(note,index=0){
+ const entries=validNoteAnchors(note);if(!entries.length)return;
+ selectedCanvasAnchorIndex=((index%entries.length)+entries.length)%entries.length;
+ const {anchor,block}=entries[selectedCanvasAnchorIndex];
+ state.activeBlockId=block.id;recordTab=recordTabForBlock(block);state.activeCanvasTab=recordTab;
+ state.canvasPanels.source=true;saveState();applyCanvasPanels();renderCanvasSource();renderRecordTable();
+ requestAnimationFrame(()=>{
+  const source=$('[data-source-block="'+CSS.escape(block.id)+'"]');
+  const marks=source?[...source.querySelectorAll('mark[data-note-id="'+CSS.escape(note.id)+'"]')]:[];
+  const quote=String(anchor.quote||'').replace(/\s+/g,' ').trim();
+  const target=marks.find((mark)=>mark.textContent.replace(/\s+/g,' ').trim()===quote)||marks[0]||source;
+  target?.scrollIntoView({behavior:'smooth',block:'center',inline:'nearest'});renderCrossLinks();
+ });
+}
+function canvasArrowSvg(direction){
+ const paths={left:'M15 5 8 12l7 7',right:'m9 5 7 7-7 7',up:'m5 15 7-7 7 7',down:'m5 9 7 7 7-7'};
+ return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+paths[direction]+'"/></svg>';
+}
+function clearCanvasNoteSelection(){
+ selectedCanvasNoteId=null;selectedCanvasAnchorIndex=0;
+ $$('#node-layer .canvas-node.is-selected').forEach((node)=>node.classList.remove('is-selected'));
+ $$('#node-layer .canvas-note-navigation').forEach((nav)=>nav.remove());
+}
+function navigateCanvasNote(delta){
+ if(!state.notes.length)return;
+ const current=Math.max(0,state.notes.findIndex((note)=>note.id===selectedCanvasNoteId));
+ const next=(current+delta+state.notes.length)%state.notes.length;
+ selectCanvasNote(state.notes[next].id,{focus:true,anchorIndex:0});
+}
+function installCanvasNoteNavigation(node,note){
+ node.querySelector('.canvas-note-navigation')?.remove();
+ const navigation=document.createElement('div');navigation.className='canvas-note-navigation';navigation.setAttribute('aria-label','선택한 메모 탐색');
+ const add=(direction,label,action)=>{const button=document.createElement('button');button.type='button';button.className='canvas-note-nav-'+direction;button.setAttribute('aria-label',label);button.innerHTML=canvasArrowSvg(direction);button.onclick=(event)=>{event.preventDefault();event.stopPropagation();action();};navigation.append(button);};
+ if(state.notes.length>1){add('left','먼저 만든 메모',()=>navigateCanvasNote(-1));add('right','나중에 만든 메모',()=>navigateCanvasNote(1));}
+ const anchors=validNoteAnchors(note);
+ if(anchors.length>1){
+  add('up','이전 생기부 근거',()=>activateNoteAnchor(note,selectedCanvasAnchorIndex-1));
+  add('down','다음 생기부 근거',()=>activateNoteAnchor(note,selectedCanvasAnchorIndex+1));
+ }
+ node.append(navigation);
+}
+function selectCanvasNote(id,{focus=false,anchorIndex=0}={}){
+ const note=state.notes.find((item)=>item.id===id),node=$('.canvas-node[data-note-id="'+CSS.escape(id)+'"]');if(!note||!node)return;
+ clearCanvasNoteSelection();selectedCanvasNoteId=id;selectedCanvasAnchorIndex=anchorIndex;
+ node.classList.add('is-selected');installCanvasNoteNavigation(node,note);
+ if(validNoteAnchors(note).length)activateNoteAnchor(note,anchorIndex);
+ if(focus)focusCanvasNote(node);
+}
 function jumpToNote(id){
  const note=state.notes.find(item=>item.id===id);if(!note)return;
- graphMode=false;renderCanvas();requestAnimationFrame(()=>{const node=$('.canvas-node[data-note-id="'+CSS.escape(id)+'"]');if(node)focusCanvasNote(node);});
+ graphMode=false;selectedCanvasNoteId=id;selectedCanvasAnchorIndex=0;renderCanvas();
+ requestAnimationFrame(()=>selectCanvasNote(id,{focus:true,anchorIndex:0}));
 }
-
 function noteVisibleOnCanvas(){ return true; }
 function canvasItems() {
   state.canvasPositions ||= {};
@@ -814,12 +873,14 @@ function renderCanvas() {
     const editTitle = item.kind === "note" ? 'class="node-title-edit" contenteditable="false" spellcheck="true"' : "";
     const editBody = item.kind === "note" ? 'class="node-body-edit" contenteditable="false" spellcheck="true"' : "";
     node.innerHTML = `<div class="node-top"><div class="node-category-wrap">${categoryControl}</div><div class="node-actions">${actions}</div></div><h3 ${editTitle}>${escapeHtml(item.title)}</h3><div ${editBody}>${safeNoteHtml(item.bodyHtml || escapeHtml(item.body || ""))}</div>${connector}`;
+    if(!graphMode&&item.kind==="note"&&item.id===selectedCanvasNoteId){node.classList.add("is-selected");installCanvasNoteNavigation(node,item.sourceNote);}
     if(!graphMode)enableNodeDrag(node, item);
     else node.addEventListener("click",()=>jumpToNote(item.id));
     node.addEventListener("dblclick",(event)=>{if(event.target.closest("button,[contenteditable]"))return;focusCanvasNote(node);});
     if(item.kind === "note"){
       node.addEventListener('contextmenu',(event)=>{event.preventDefault();event.stopPropagation();showNoteContextMenu(event,item.id);});
       node.addEventListener('click',(event)=>{if(linkingFromNoteId && linkingFromNoteId!==item.id){event.preventDefault();event.stopPropagation();connectPendingNote(item.id);}},true);
+      if(!graphMode)node.addEventListener('click',(event)=>{if(event.target.closest('button,input,[contenteditable="true"]')||node.dataset.justDragged==='true'||linkingFromNoteId)return;selectCanvasNote(item.id,{anchorIndex:item.id===selectedCanvasNoteId?selectedCanvasAnchorIndex:0});});
     }
     if (item.kind === "note") {
       const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
@@ -936,7 +997,21 @@ function bindViewSettings(){
   'canvas-link-width':'canvasLinkWidth',
   'canvas-link-opacity':'canvasLinkOpacity'
  };
- Object.entries(controls).forEach(([id,key])=>{const input=$('#'+id);if(!input)return;input.oninput=()=>{state.visualSettings[key]=Number(input.value);applyVisualSettings();saveState();};});
+ Object.entries(controls).forEach(([id,key])=>{
+  const input=$('#'+id);if(!input)return;
+  input.oninput=()=>{
+   const previous=Number(state.visualSettings[key]),next=Number(input.value);
+   // 노드 크기가 바뀌어도 각 노드의 화면상 중심점은 그대로 유지한다.
+   if(key==='graphNodeSize'){
+    const offset=(previous-next)/2;
+    $$('#all-graph-nodes .all-graph-item').forEach((node)=>{
+     node.style.left=(parseFloat(node.style.left)+offset)+'px';
+     node.style.top=(parseFloat(node.style.top)+offset)+'px';
+    });
+   }
+   state.visualSettings[key]=next;applyVisualSettings();saveState();
+  };
+ });
  applyVisualSettings();
 }
 function applyCanvasPanels(){
@@ -1046,11 +1121,11 @@ function enableNodeDrag(node, note) {
     lastPress=now;lastEditor=editor;
     if(event.button!==0 || event.target.closest("button,input,[contenteditable=\"true\"]"))return;
     event.preventDefault(); event.stopPropagation(); node.setPointerCapture(event.pointerId); node.classList.add("dragging"); movingNodeId=note.id;
-    const start={x:event.clientX,y:event.clientY,left:parseFloat(node.style.left),top:parseFloat(node.style.top),time:performance.now()};let target={x:start.left,y:start.top},velocity={x:0,y:0},last={x:start.left,y:start.top,time:start.time},frame=0;
+    const start={x:event.clientX,y:event.clientY,left:parseFloat(node.style.left),top:parseFloat(node.style.top),time:performance.now()};let target={x:start.left,y:start.top},velocity={x:0,y:0},last={x:start.left,y:start.top,time:start.time},frame=0,dragged=false;
     const paint=()=>{const x=parseFloat(node.style.left),y=parseFloat(node.style.top);node.style.left=(x+(target.x-x)*.48)+"px";node.style.top=(y+(target.y-y)*.48)+"px";storeNodePosition(node);renderEdges();if(!layoutFrame)settleNodes();if(Math.abs(target.x-parseFloat(node.style.left))+Math.abs(target.y-parseFloat(node.style.top))>.2)frame=requestAnimationFrame(paint);else frame=0;};
-    const move=e=>{const now=performance.now();if(Math.hypot(e.clientX-start.x,e.clientY-start.y)>5){lastPress=0;lastEditor=null;}target={x:start.left+(e.clientX-start.x)/canvasZoom,y:start.top+(e.clientY-start.y)/canvasZoom};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
+    const move=e=>{const now=performance.now();if(Math.hypot(e.clientX-start.x,e.clientY-start.y)>5){dragged=true;lastPress=0;lastEditor=null;}target={x:start.left+(e.clientX-start.x)/canvasZoom,y:start.top+(e.clientY-start.y)/canvasZoom};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
     const glide=()=>{velocity.x*=.9;velocity.y*=.9;target.x+=velocity.x;target.y+=velocity.y;node.style.left=target.x+"px";node.style.top=target.y+"px";storeNodePosition(node);renderEdges();if(!layoutFrame)settleNodes();if(Math.abs(velocity.x)+Math.abs(velocity.y)>.15)requestAnimationFrame(glide);else{settleNodes();saveState();}};
-    const up=()=>{node.classList.remove("dragging");movingNodeId=null;node.removeEventListener("pointermove",move);node.removeEventListener("pointerup",up);node.removeEventListener("pointercancel",up);if(frame)cancelAnimationFrame(frame);requestAnimationFrame(glide);};
+    const up=()=>{node.classList.remove("dragging");movingNodeId=null;if(dragged){node.dataset.justDragged="true";setTimeout(()=>delete node.dataset.justDragged,0);}node.removeEventListener("pointermove",move);node.removeEventListener("pointerup",up);node.removeEventListener("pointercancel",up);if(frame)cancelAnimationFrame(frame);requestAnimationFrame(glide);};
     settleNodes();node.addEventListener("pointermove",move);node.addEventListener("pointerup",up);node.addEventListener("pointercancel",up);
   });
 }
@@ -1563,6 +1638,7 @@ function createInlineCanvasNote(position=null) {
 function deleteNoteWithConfirmation(id) {
   const note = state.notes.find((item) => item.id === id);
   if (!note || !window.confirm('"' + note.title + '" 메모를 삭제할까요?')) return;
+  if(selectedCanvasNoteId===id)clearCanvasNoteSelection();
   state.notes = state.notes.filter((item) => item.id !== id);
   state.notes.forEach((item) => { item.links = (item.links || []).filter((link) => link !== id); });
   state.highlights = state.highlights.filter((highlight) => highlight.noteId !== id);
@@ -1844,7 +1920,7 @@ function installCanvasPan(){
   const menu=$('#canvas-context-menu');menu.style.left=Math.max(8,Math.min(innerWidth-210,event.clientX))+'px';menu.style.top=Math.max(8,Math.min(innerHeight-70,event.clientY))+'px';menu.hidden=false;
  });
  stage.addEventListener('pointerdown',e=>{
-  if(e.button!==0||e.target.closest('.canvas-node,button,input'))return;e.preventDefault();stage.setPointerCapture(e.pointerId);stage.classList.add('panning');
+  if(e.button!==0||e.target.closest('.canvas-node,button,input'))return;clearCanvasNoteSelection();e.preventDefault();stage.setPointerCapture(e.pointerId);stage.classList.add('panning');
   const start={x:e.clientX,y:e.clientY,px:canvasPan.x,py:canvasPan.y};let target={...canvasPan},velocity={x:0,y:0},last={...canvasPan,time:performance.now()},frame=0;
   const paint=()=>{canvasPan.x+=(target.x-canvasPan.x)*.42;canvasPan.y+=(target.y-canvasPan.y)*.42;$('#node-layer').style.transform='translate('+canvasPan.x+'px,'+canvasPan.y+'px) scale('+canvasZoom+')';renderEdges();renderCrossLinks();if(Math.abs(target.x-canvasPan.x)+Math.abs(target.y-canvasPan.y)>.2)frame=requestAnimationFrame(paint);else frame=0;};
   const move=ev=>{const now=performance.now();target={x:start.px+ev.clientX-start.x,y:start.py+ev.clientY-start.y};const dt=Math.max(8,now-last.time);velocity={x:(target.x-last.x)/dt*16,y:(target.y-last.y)/dt*16};last={x:target.x,y:target.y,time:now};if(!frame)frame=requestAnimationFrame(paint);};
