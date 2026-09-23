@@ -1230,29 +1230,49 @@ function fitAllGraph() {
   paintAllGraph();
 }
 function updateAllGraphFocus(noteId) {
-  const connected = new Set([noteId]);
   const lines = $$('#all-graph-edges line');
+  const adjacency = new Map();
+  const addNeighbor = (from,to) => {
+    if (!adjacency.has(from)) adjacency.set(from,new Set());
+    adjacency.get(from).add(to);
+  };
 
-  // 선택한 노드에 직접 닿은 실제 링크와 유사 링크를 모두 연결 관계로 본다.
-  lines.forEach(line => {
-    const a = line.dataset.noteA;
-    const b = line.dataset.noteB;
-    const isConnected = a === noteId || b === noteId;
-    line.classList.toggle('selection-dimmed', !isConnected);
-    line.classList.toggle('selection-connected', isConnected);
-    if (isConnected) connected.add(a === noteId ? b : a);
+  // 실제 링크와 유사 링크를 이용해 선택 노드에서 두 단계까지의 관계를 계산한다.
+  lines.forEach((line) => {
+    const a=line.dataset.noteA,b=line.dataset.noteB;
+    if(!a||!b)return;
+    addNeighbor(a,b);addNeighbor(b,a);
+  });
+  const first=new Set(adjacency.get(noteId)||[]);
+  const second=new Set();
+  first.forEach((id)=>(adjacency.get(id)||[]).forEach((neighbor)=>{
+    if(neighbor!==noteId&&!first.has(neighbor))second.add(neighbor);
+  }));
+
+  lines.forEach((line) => {
+    const a=line.dataset.noteA,b=line.dataset.noteB;
+    const isDirect=a===noteId||b===noteId;
+    const isSecondary=!isDirect&&(
+      (first.has(a)&&(first.has(b)||second.has(b)))||
+      (first.has(b)&&(first.has(a)||second.has(a)))
+    );
+    line.classList.toggle('selection-connected',isDirect);
+    line.classList.toggle('selection-secondary',isSecondary);
+    line.classList.toggle('selection-dimmed',!isDirect&&!isSecondary);
   });
 
-  $$('#all-graph-nodes .all-graph-item').forEach(node => {
-    node.classList.toggle('selection-dimmed', !connected.has(node.dataset.noteId));
-    node.classList.toggle('selection-connected', connected.has(node.dataset.noteId) && node.dataset.noteId !== noteId);
+  $$('#all-graph-nodes .all-graph-item').forEach((node) => {
+    const id=node.dataset.noteId,isFirst=first.has(id),isSecond=second.has(id);
+    node.classList.toggle('selection-connected',isFirst);
+    node.classList.toggle('selection-secondary',isSecond);
+    node.classList.toggle('selection-dimmed',id!==noteId&&!isFirst&&!isSecond);
   });
 }
 function clearAllGraphSelection(){
   selectedAllGraphNoteId=null;
-  $$('#all-graph-nodes .all-graph-item').forEach((node)=>node.classList.remove('selected','selection-dimmed','selection-connected'));
-  $$('#all-graph-edges line').forEach((line)=>line.classList.remove('selection-dimmed','selection-connected'));
-  const panel=$("#all-graph-detail");if(panel)panel.innerHTML='<p>메모를 선택하세요.</p>';
+  $$('#all-graph-nodes .all-graph-item').forEach((node)=>node.classList.remove('selected','selection-dimmed','selection-connected','selection-secondary'));
+  $$('#all-graph-edges line').forEach((line)=>line.classList.remove('selection-dimmed','selection-connected','selection-secondary'));
+  const panel=$("#all-graph-detail-content");if(panel)panel.innerHTML='<p>메모를 선택하세요.</p>';
 }
 function showAllGraphNote(note) {
   selectedAllGraphNoteId = note.id;
@@ -1260,7 +1280,7 @@ function showAllGraphNote(note) {
   updateAllGraphFocus(note.id);
   const anchors = (note.anchors || []).map(anchor => {const block = state.blocks.find(item => item.id === anchor.blockId);return '<li>' + escapeHtml([block?.grade,block?.subject,anchor.quote].filter(Boolean).join(' · ')) + '</li>';}).join('');
   const links = (note.links || []).map(id => state.notes.find(item => item.id === id)).filter(Boolean);
-  const panel = $("#all-graph-detail");
+  const panel = $("#all-graph-detail-content");
   const meta=[noteCanvas(note),noteContext(note).subjects.join(', '),normalizeNoteCategory(note.category)].filter(Boolean).join(' · ');
   panel.innerHTML = '<span class="graph-detail-meta">' + escapeHtml(meta) + '</span><h2>' + escapeHtml(note.title) + '</h2><div class="graph-detail-body">' + safeNoteHtml(note.bodyHtml || escapeHtml(note.body || '')) + '</div>' + (anchors ? '<h3>근거</h3><ul>' + anchors + '</ul>' : '') + (links.length ? '<h3>연결</h3><div class="graph-detail-links"></div>' : '') + '<button type="button" class="primary-button graph-open-note">캔버스에서 열기</button>';
   const linkBox = panel.querySelector('.graph-detail-links');

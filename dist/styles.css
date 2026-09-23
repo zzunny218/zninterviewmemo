@@ -516,13 +516,16 @@ mark.source-highlight.linked,.canvas-source-document mark.source-highlight.linke
 /* Keep both text and highlighter palettes in the same vertical layout. */
 .floating-color-menu{display:block!important}.floating-color-menu .spectrum-color-row{width:100%;box-sizing:border-box}
 
-/* 선택한 전체 그래프 노드와 직접 연결된 관계만 선명하게 유지한다. */
+/* 선택 노드에서 한 단계·두 단계·비연결 순서로 밝기를 구분한다. */
 .all-graph-item,#all-graph-edges line{transition:opacity .2s ease,filter .2s ease,stroke .2s ease}
-.all-graph-item.selection-dimmed{opacity:.13;filter:brightness(.42) saturate(.45)}
-#all-graph-edges line.selection-dimmed{opacity:.08}
+.all-graph-item.selection-dimmed{opacity:.3;filter:brightness(.62) saturate(.65)}
+#all-graph-edges line.selection-dimmed{opacity:.12}
 #all-graph-edges line.selection-connected{opacity:1;stroke:rgba(255,255,255,.72)}
 #all-graph-edges line.similarity-link.selection-connected{stroke:rgba(170,181,240,.72)}
 .all-graph-item.selection-connected{opacity:1;filter:none}
+.all-graph-item.selection-secondary{opacity:.58;filter:brightness(.8) saturate(.82)}
+#all-graph-edges line.selection-secondary{opacity:.38;stroke:rgba(255,255,255,.45)}
+#all-graph-edges line.similarity-link.selection-secondary{stroke:rgba(170,181,240,.42)}
 
 /* Left workspace rail and visual controls */
 :root{--graph-node-size:84px;--graph-link-width:2px;--graph-similarity-link-width:1.5px;--canvas-link-width:2px;--canvas-link-opacity:.38}
@@ -601,3 +604,8 @@ body:not([data-route="canvas"]) .rail-submenu{display:none}
 .floating-color-menu .recent-color-row button{width:28px!important;height:28px!important;padding:0!important;border:2px solid rgba(255,255,255,.75)!important;border-radius:5px!important;background:var(--picker-color)!important;cursor:pointer}
 .canvas-stage,.all-graph-stage,.all-graph-world,#all-graph-nodes,.all-graph-item,.all-graph-circle{user-select:none;-webkit-user-select:none;-webkit-user-drag:none}
 .canvas-stage img,.canvas-stage svg,.all-graph-stage img,.all-graph-stage svg{user-select:none;-webkit-user-select:none;-webkit-user-drag:none}
+
+/* 그래프 상세 패널의 설정은 메모 내용 아래에 고정한다. */
+.all-graph-detail{display:flex;flex-direction:column}
+#all-graph-detail-content{min-height:0}
+.graph-view-settings{margin-top:auto;padding-top:18px}
