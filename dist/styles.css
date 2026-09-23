@@ -621,3 +621,11 @@ body:not([data-route="canvas"]) .rail-submenu{display:none}
 .canvas-note-nav-up{top:-50px;left:50%;translate:-50% 0}
 .canvas-note-nav-down{bottom:-50px;left:50%;translate:-50% 0}
 @media(max-width:760px){.canvas-note-navigation button{width:40px;height:40px}.canvas-note-nav-left{left:-52px}.canvas-note-nav-right{right:-52px}.canvas-note-nav-up{top:-52px}.canvas-note-nav-down{bottom:-52px}}
+
+/* 캔버스에서 직접 고르는 링크 연결·해제 모드 */
+.unlink-menu-icon{color:#f08a98!important}
+.canvas-stage.unlinking-mode{cursor:crosshair!important}
+.canvas-stage.unlinking-mode .canvas-node{cursor:pointer!important}
+.canvas-stage.unlinking-mode .canvas-node::after{content:"해제";position:absolute;right:9px;top:-10px;padding:2px 6px;border-radius:999px;background:#a43e50;color:#fff;font-size:10px;box-shadow:0 3px 9px rgba(0,0,0,.35)}
+
+.selection-menu button[hidden]{display:none!important}

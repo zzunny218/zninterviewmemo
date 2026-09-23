@@ -205,11 +205,13 @@
 
     <div id="note-context-menu" class="selection-menu note-context-menu" role="menu" hidden>
       <button id="note-context-link" role="menuitem" type="button"><span class="menu-icon link-menu-icon">↗</span><strong>링크 연결</strong></button>
+      <button id="note-context-unlink" role="menuitem" type="button" hidden><span class="menu-icon unlink-menu-icon">×</span><strong>링크 해제</strong></button>
     </div>
 
     <div id="selection-menu" class="selection-menu" role="menu" hidden>
       <button data-selection-action="new" role="menuitem" type="button"><span class="menu-icon">＋</span><span><strong>새 메모 만들기</strong><small>선택 문장을 근거로 시작</small></span></button>
-      <button data-selection-action="link" role="menuitem" type="button"><span class="menu-icon">↗</span><span><strong>기존 메모에 연결</strong><small>생각에 근거 추가</small></span></button>
+      <button data-selection-action="link" role="menuitem" type="button"><span class="menu-icon">↗</span><span><strong>메모에 연결</strong><small>캔버스에서 메모 선택</small></span></button>
+      <button data-selection-action="unlink" role="menuitem" type="button" hidden><span class="menu-icon unlink-menu-icon">×</span><span><strong>링크 해제</strong><small>이 원문과 메모 연결 제거</small></span></button>
       <label class="selection-color"><span>연결 색상</span><input id="selection-color" type="color" value="#5865f2" aria-label="연결 색상 직접 지정" /></label>
     </div>
 
@@ -226,11 +228,6 @@
         </div>
         <div class="dialog-actions"><button id="delete-note" class="danger-text" type="button" hidden>메모 삭제</button><span></span><button class="secondary-button" value="cancel">취소</button><button id="save-note" class="primary-button" value="default">저장</button></div>
       </form>
-    </dialog>
-
-    <dialog id="link-dialog" class="app-dialog compact-dialog">
-      <div class="dialog-heading"><div><span class="eyebrow">근거 연결</span><h2>어느 메모에 연결할까요?</h2></div><button class="small-icon-button" data-close-dialog="link-dialog" aria-label="닫기">×</button></div>
-      <div id="link-note-list" class="picker-list"></div>
     </dialog>
 
     <dialog id="review-dialog" class="app-dialog review-dialog">

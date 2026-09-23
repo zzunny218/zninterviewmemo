@@ -139,6 +139,9 @@ let canvasFilters = { query: "", category: "전체", grade: "전체", subject: "
 let canvasContextPoint = null;
 let noteContextId = null;
 let linkingFromNoteId = null;
+let linkingFromAnchor = null;
+let unlinkingFromNoteId = null;
+let selectedAnchorNoteId = null;
 let allGraphAnimationFrame = 0;
 let canvasWheelSaveTimer = 0;
 const CANVAS_MIN_ZOOM = .15;
@@ -315,6 +318,7 @@ function renderSourceText(block) {
     const mark = document.createElement("mark");
     mark.className = `source-highlight${highlight.noteId ? " linked" : ""}`;
     mark.dataset.highlightId = highlight.id;
+    if(highlight.noteId)mark.dataset.noteId=highlight.noteId;
     const linkedNote = state.notes.find((note) => note.id === highlight.noteId);
     mark.style.setProperty("--link-color", linkedNote?.color || highlight.color || "#5865f2");
     mark.textContent = block.text.slice(highlight.start, highlight.end);
@@ -386,19 +390,28 @@ function renderLinkedBlockText(block) {
   return html + display(block.text.slice(cursor));
 }
 
+function anchorFromLinkedMark(mark){
+ if(!mark)return null;
+ const block=state.blocks.find((item)=>item.id===mark.closest('[data-source-block]')?.dataset.sourceBlock)||activeBlock();
+ if(!block)return null;
+ const quote=mark.textContent.trim(),match=findQuoteRange(block.text,quote);
+ return {blockId:block.id,quote,page:block.page,pages:block.sourcePages||[block.page],grade:block.grade,subject:block.subject,semester:block.semester||'',start:match?.start??-1,end:match?.end??-1};
+}
 function showSelectionMenu(event) {
-  const anchor = getSelectionAnchor();
+  const linkedMark=event.target.closest('mark[data-note-id],mark[data-highlight-id]');
+  const anchor=anchorFromLinkedMark(linkedMark)||getSelectionAnchor();
   if (!anchor) return;
   event.preventDefault();
-  selectedAnchor = anchor;
-  const menu = $("#selection-menu");
+  selectedAnchor=anchor;
+  selectedAnchorNoteId=linkedMark?.dataset.noteId||state.highlights.find((item)=>item.id===linkedMark?.dataset.highlightId)?.noteId||null;
+  const menu = $("#selection-menu"),unlink=$("[data-selection-action='unlink']",menu);
+  if(unlink)unlink.hidden=!selectedAnchorNoteId;
   menu.hidden = false;
   const x = Math.min(event.clientX, innerWidth - 252);
-  const y = Math.min(event.clientY, innerHeight - 190);
+  const y = Math.min(event.clientY, innerHeight - 220);
   menu.style.left = `${Math.max(8, x)}px`;
   menu.style.top = `${Math.max(8, y)}px`;
 }
-
 function applyHighlight(anchor, noteId = null, color = $("#selection-color")?.value || "#5865f2") {
   const existing = state.highlights.find((item) => item.blockId === anchor.blockId && item.quote === anchor.quote);
   if (!existing) state.highlights.push({ id: uid("hl"), ...anchor, noteId, color });
@@ -472,28 +485,6 @@ function saveNoteFromForm() {
   renderRecord();
   toast(id ? "메모를 수정했어요." : "새 메모를 만들었어요.");
   return true;
-}
-
-function openLinkDialog(anchor) {
-  selectedAnchor = anchor;
-  const list = $("#link-note-list");
-  list.innerHTML = "";
-  state.notes.forEach((note) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "picker-item";
-    button.innerHTML = `<span><strong>${escapeHtml(note.title)}</strong><br><small>${escapeHtml(note.category)} · 근거 ${note.anchors.length}</small></span><span>연결</span>`;
-    button.addEventListener("click", () => {
-      if (!note.color) note.color = $("#selection-color").value || "#5865f2";
-      if (!note.anchors.some((item) => item.blockId === anchor.blockId && item.quote === anchor.quote)) note.anchors.push(anchor);
-      applyHighlight(anchor, note.id, note.color || $("#selection-color").value);
-      saveState();
-      $("#link-dialog").close();
-      toast("원문을 메모의 근거로 연결했어요.");
-    });
-    list.appendChild(button);
-  });
-  $("#link-dialog").showModal();
 }
 
 function openReview() {
@@ -879,8 +870,8 @@ function renderCanvas() {
     node.addEventListener("dblclick",(event)=>{if(event.target.closest("button,[contenteditable]"))return;focusCanvasNote(node);});
     if(item.kind === "note"){
       node.addEventListener('contextmenu',(event)=>{event.preventDefault();event.stopPropagation();showNoteContextMenu(event,item.id);});
-      node.addEventListener('click',(event)=>{if(linkingFromNoteId && linkingFromNoteId!==item.id){event.preventDefault();event.stopPropagation();connectPendingNote(item.id);}},true);
-      if(!graphMode)node.addEventListener('click',(event)=>{if(event.target.closest('button,input,[contenteditable="true"]')||node.dataset.justDragged==='true'||linkingFromNoteId)return;selectCanvasNote(item.id,{anchorIndex:item.id===selectedCanvasNoteId?selectedCanvasAnchorIndex:0});});
+      node.addEventListener('click',(event)=>{if((linkingFromNoteId||linkingFromAnchor||unlinkingFromNoteId) && item.id!==linkingFromNoteId && item.id!==unlinkingFromNoteId){event.preventDefault();event.stopPropagation();connectPendingNote(item.id);}},true);
+      if(!graphMode)node.addEventListener('click',(event)=>{if(event.target.closest('button,input,[contenteditable="true"]')||node.dataset.justDragged==='true'||linkingFromNoteId||linkingFromAnchor||unlinkingFromNoteId)return;selectCanvasNote(item.id,{anchorIndex:item.id===selectedCanvasNoteId?selectedCanvasAnchorIndex:0});});
     }
     if (item.kind === "note") {
       const popover=document.createElement("div"); popover.className="node-style-popover"; popover.hidden=true;
@@ -924,14 +915,26 @@ function renderCanvas() {
 }
 
 function showNoteContextMenu(event,noteId){
- noteContextId=noteId;const menu=$("#note-context-menu");menu.hidden=false;
- menu.style.left=Math.max(8,Math.min(innerWidth-210,event.clientX))+'px';menu.style.top=Math.max(8,Math.min(innerHeight-70,event.clientY))+'px';
+ noteContextId=noteId;const note=state.notes.find((item)=>item.id===noteId),menu=$("#note-context-menu"),unlink=$("#note-context-unlink");
+ if(unlink)unlink.hidden=!note||(!(note.links||[]).length&&!(note.anchors||[]).length);
+ menu.hidden=false;menu.style.left=Math.max(8,Math.min(innerWidth-210,event.clientX))+'px';menu.style.top=Math.max(8,Math.min(innerHeight-110,event.clientY))+'px';
 }
-function cancelPendingLink(message='링크 연결을 취소했어요.'){
- if(!linkingFromNoteId)return;linkingFromNoteId=null;$("#canvas-stage")?.classList.remove('linking-mode');toast(message);
+function finishPendingLinkMode(){
+ linkingFromNoteId=null;linkingFromAnchor=null;unlinkingFromNoteId=null;
+ const stage=$("#canvas-stage");stage?.classList.remove('linking-mode','unlinking-mode');window.getSelection()?.removeAllRanges();
+}
+function cancelPendingLink(message='링크 작업을 취소했어요.'){
+ if(!linkingFromNoteId&&!linkingFromAnchor&&!unlinkingFromNoteId)return;
+ finishPendingLinkMode();toast(message);
 }
 function beginPendingLink(noteId){
- linkingFromNoteId=noteId;$("#note-context-menu").hidden=true;$("#canvas-stage")?.classList.add('linking-mode');toast('연결할 메모를 누르거나 생기부 문장을 드래그하세요.');
+ finishPendingLinkMode();linkingFromNoteId=noteId;$("#note-context-menu").hidden=true;$("#canvas-stage")?.classList.add('linking-mode');toast('연결할 메모를 누르거나 생기부 문장을 드래그하세요.');
+}
+function beginPendingAnchorLink(anchor){
+ finishPendingLinkMode();linkingFromAnchor={...anchor};$("#selection-menu").hidden=true;$("#canvas-stage")?.classList.add('linking-mode');toast('연결할 메모를 캔버스에서 클릭하세요.');
+}
+function beginPendingUnlink(noteId){
+ finishPendingLinkMode();unlinkingFromNoteId=noteId;$("#note-context-menu").hidden=true;$("#canvas-stage")?.classList.add('unlinking-mode');toast('해제할 연결된 메모나 생기부 문장을 클릭하세요.');
 }
 function linkNotesBidirectionally(source,target){
  if(!source||!target||source.id===target.id)return false;
@@ -940,21 +943,43 @@ function linkNotesBidirectionally(source,target){
  if(!target.links.includes(source.id)){target.links.push(source.id);changed=true;}
  return changed;
 }
+function unlinkNotesBidirectionally(source,target){
+ if(!source||!target||source.id===target.id)return false;
+ const before=(source.links||[]).length+(target.links||[]).length;
+ source.links=(source.links||[]).filter((id)=>id!==target.id);target.links=(target.links||[]).filter((id)=>id!==source.id);
+ return before!==source.links.length+target.links.length;
+}
+function connectAnchorToNote(note,anchor){
+ if(!note||!anchor)return false;
+ note.anchors||=[];if(note.anchors.some((item)=>item.blockId===anchor.blockId&&item.quote===anchor.quote))return false;
+ note.anchors.push({...anchor});if(!note.color)note.color=$("#selection-color")?.value||'#5865f2';applyHighlight(anchor,note.id,note.color);return true;
+}
+function syncHighlightAfterAnchorRemoval(anchor,noteId){
+ const index=state.highlights.findIndex((item)=>item.blockId===anchor.blockId&&item.quote===anchor.quote&&(!item.noteId||item.noteId===noteId));
+ if(index<0)return;
+ const replacement=state.notes.find((note)=>note.id!==noteId&&(note.anchors||[]).some((item)=>item.blockId===anchor.blockId&&item.quote===anchor.quote));
+ if(replacement){state.highlights[index].noteId=replacement.id;state.highlights[index].color=replacement.color||'#5865f2';}
+ else state.highlights.splice(index,1);
+}
+function unlinkNoteAnchor(noteId,anchor){
+ const note=state.notes.find((item)=>item.id===noteId);if(!note||!anchor)return false;
+ const before=(note.anchors||[]).length;note.anchors=(note.anchors||[]).filter((item)=>!(item.blockId===anchor.blockId&&item.quote===anchor.quote));
+ if(note.anchors.length===before)return false;syncHighlightAfterAnchorRemoval(anchor,noteId);return true;
+}
 function connectPendingNote(targetId){
- const source=state.notes.find((note)=>note.id===linkingFromNoteId),target=state.notes.find((note)=>note.id===targetId);
- if(!source||!target||source.id===target.id)return;
- linkNotesBidirectionally(source,target);
- linkingFromNoteId=null;$("#canvas-stage")?.classList.remove('linking-mode');saveState();renderCanvas();toast('두 메모를 연결했어요.');
+ const target=state.notes.find((note)=>note.id===targetId);if(!target)return;
+ if(linkingFromAnchor){const changed=connectAnchorToNote(target,linkingFromAnchor);finishPendingLinkMode();saveState();renderRecord();renderCanvas();toast(changed?'원문을 메모에 연결했어요.':'이미 연결된 원문이에요.');return;}
+ if(unlinkingFromNoteId){const source=state.notes.find((note)=>note.id===unlinkingFromNoteId);if(!source||source.id===target.id)return;const changed=unlinkNotesBidirectionally(source,target);finishPendingLinkMode();saveState();renderCanvas();toast(changed?'메모 연결을 해제했어요.':'서로 연결된 메모가 아니에요.');return;}
+ const source=state.notes.find((note)=>note.id===linkingFromNoteId);if(!source||source.id===target.id)return;
+ const changed=linkNotesBidirectionally(source,target);finishPendingLinkMode();saveState();renderCanvas();toast(changed?'두 메모를 연결했어요.':'이미 연결된 메모예요.');
 }
 function connectPendingAnchor(anchor){
  const note=state.notes.find((item)=>item.id===linkingFromNoteId);if(!note||!anchor)return;
- if(!note.anchors.some((item)=>item.blockId===anchor.blockId&&item.quote===anchor.quote))note.anchors.push(anchor);
- const highlight=state.highlights.find((item)=>item.blockId===anchor.blockId&&item.quote===anchor.quote);
- if(highlight){highlight.noteId=note.id;highlight.color=note.color||'#5865f2';}
- else state.highlights.push({id:uid('hl'),...anchor,noteId:note.id,color:note.color||'#5865f2'});
- linkingFromNoteId=null;$("#canvas-stage")?.classList.remove('linking-mode');window.getSelection()?.removeAllRanges();saveState();renderRecord();renderCanvas();toast('선택한 원문을 메모에 연결했어요.');
+ const changed=connectAnchorToNote(note,anchor);finishPendingLinkMode();saveState();renderRecord();renderCanvas();toast(changed?'선택한 원문을 메모에 연결했어요.':'이미 연결된 원문이에요.');
 }
-
+function disconnectPendingAnchor(anchor,noteId=unlinkingFromNoteId){
+ const changed=unlinkNoteAnchor(noteId,anchor);finishPendingLinkMode();saveState();renderRecord();renderCanvas();toast(changed?'원문과 메모의 연결을 해제했어요.':'이 메모와 연결된 원문이 아니에요.');
+}
 function installFootnotes(node,note){
  const section=document.createElement('section');section.className='note-footnotes';section.addEventListener('pointerdown',event=>event.stopPropagation());
  const items=document.createElement('div');items.className='footnote-items';
@@ -1038,7 +1063,7 @@ function showNoteRelations(node,note){
  related.forEach((other)=>{const button=document.createElement('button');button.type='button';button.textContent=['↔ '+other.title,noteCanvas(other)].filter(Boolean).join(' · ');button.onclick=()=>jumpToNote(other.id);list.append(button);});
  if(!list.children.length)list.textContent='연결된 메모 없음';
  panel.querySelector('.relation-close').onclick=()=>panel.remove();
- panel.querySelector('.relation-add').onclick=()=>{list.innerHTML='';state.notes.filter((other)=>other.id!==note.id&&!relatedIds.has(other.id)).forEach((other)=>{const button=document.createElement('button');button.type='button';button.textContent=[other.title,noteCanvas(other)].filter(Boolean).join(' · ');button.onclick=()=>{linkNotesBidirectionally(note,other);saveState();renderCanvas();};list.append(button);});};
+  panel.querySelector('.relation-add').onclick=()=>{panel.remove();beginPendingLink(note.id);};
  node.append(panel);
 }
 
@@ -1114,7 +1139,7 @@ function renderCanvasResults(items = canvasItems()) {
 function enableNodeDrag(node, note) {
   let lastPress=0,lastEditor=null;
   node.addEventListener("pointerdown", (event) => {
-    if(linkingFromNoteId)return;
+    if(linkingFromNoteId||linkingFromAnchor||unlinkingFromNoteId)return;
     const editor=event.target.closest('.node-title-edit,.node-body-edit'),now=performance.now();
     // 한 번 누르면 드래그하고, 같은 글자를 빠르게 두 번 누르면 편집한다.
     if(editor&&editor===lastEditor&&now-lastPress<420){lastPress=0;lastEditor=null;editor.contentEditable='true';editor.focus();return;}
@@ -1676,12 +1701,21 @@ function bindEvents() {
     if (!event.target.closest("#canvas-context-menu")) $("#canvas-context-menu").hidden = true;
     if (!event.target.closest("#note-context-menu")) $("#note-context-menu").hidden = true;
   });
+  document.addEventListener('click',(event)=>{
+    if(!unlinkingFromNoteId)return;
+    const mark=event.target.closest('mark[data-note-id],mark[data-highlight-id]');if(!mark)return;
+    const linkedId=mark.dataset.noteId||state.highlights.find((item)=>item.id===mark.dataset.highlightId)?.noteId;
+    if(linkedId!==unlinkingFromNoteId)return;
+    const anchor=anchorFromLinkedMark(mark);if(!anchor)return;
+    event.preventDefault();event.stopImmediatePropagation();disconnectPendingAnchor(anchor,unlinkingFromNoteId);
+  },true);
   document.addEventListener('mouseup',(event)=>{
     if(!linkingFromNoteId||!event.target.closest('#record-table,#canvas-source-document,#source-document'))return;
     setTimeout(()=>{const anchor=getSelectionAnchor();if(anchor)connectPendingAnchor(anchor);},0);
   });
   $("#canvas-context-new-note").addEventListener("click",()=>{const point=canvasContextPoint;$("#canvas-context-menu").hidden=true;createInlineCanvasNote(point);});
   $("#note-context-link").addEventListener('click',()=>{if(noteContextId)beginPendingLink(noteContextId);});
+  $("#note-context-unlink").addEventListener('click',()=>{if(noteContextId)beginPendingUnlink(noteContextId);});
   $$("[data-selection-action]").forEach((button) => button.addEventListener("click", () => {
     const action = button.dataset.selectionAction;
     $("#selection-menu").hidden = true;
@@ -1689,7 +1723,11 @@ function bindEvents() {
     if (action === "new") {
       const anchor={...selectedAnchor};createInlineCanvasNote();const note=state.notes.at(-1);note.title=suggestTitle(anchor.quote);note.anchors.push(anchor);note.color=$("#selection-color").value;applyHighlight(anchor,note.id,note.color);saveState();renderCanvas();
     }
-    if (action === "link") openLinkDialog(selectedAnchor);
+    if (action === "link") beginPendingAnchorLink(selectedAnchor);
+    if (action === "unlink" && selectedAnchorNoteId) {
+      const changed=unlinkNoteAnchor(selectedAnchorNoteId,selectedAnchor);selectedAnchorNoteId=null;
+      saveState();renderRecord();renderCanvas();toast(changed?"원문과 메모의 연결을 해제했어요.":"이미 해제된 링크예요.");
+    }
 
   }));
   $("#new-note-button").addEventListener("click", () => openNoteDialog());
